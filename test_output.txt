@@ -1,0 +1,17 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- D:\Projects\EarthTaskTelemetry\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: D:\Projects\EarthTaskTelemetry
+plugins: anyio-4.12.0
+collecting ... collected 8 items
+
+backend/tests/test_health.py::test_health_returns_ok PASSED              [ 12%]
+backend/tests/test_ingest_and_finalize.py::test_ingest_event_stores_successfully PASSED [ 25%]
+backend/tests/test_ingest_and_finalize.py::test_finalize_all_first_attempt_correct PASSED [ 37%]
+backend/tests/test_ingest_and_finalize.py::test_finalize_mixed_attempts PASSED [ 50%]
+backend/tests/test_ingest_and_finalize.py::test_finalize_one_sequence_unsolved PASSED [ 62%]
+backend/tests/test_ingest_and_finalize.py::test_get_player_sessions PASSED [ 75%]
+backend/tests/test_ingest_and_finalize.py::test_finalize_no_events_returns_404 PASSED [ 87%]
+backend/tests/test_ingest_and_finalize.py::test_finalize_idempotent PASSED [100%]
+
+============================== 8 passed in 0.84s ==============================
