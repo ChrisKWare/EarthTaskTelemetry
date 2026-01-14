@@ -1,5 +1,7 @@
 """Streamlit dashboard for Earth Task Telemetry."""
 import os
+import time
+from datetime import datetime, timezone
 
 import streamlit as st
 import pandas as pd
@@ -39,6 +41,124 @@ def get_player_sessions(player_id: str):
         return []
 
 
+def get_model_state(player_id: str):
+    """Fetch model state for a player."""
+    try:
+        response = requests.get(f"{API_BASE_URL}/model/state/{player_id}", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
+            return None
+        else:
+            return {"error": f"HTTP {response.status_code}"}
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)}
+
+
+def create_event(
+    player_id: str,
+    session_id: str,
+    sequence_index: int,
+    attempt_index: int,
+    is_correct: bool,
+    sequence_length: int = 4,
+    ts_utc: str = None,
+):
+    """Create event payload matching backend schema (from backend/tests/test_ingest_and_finalize.py)."""
+    if ts_utc is None:
+        ts_utc = datetime.now(timezone.utc).isoformat()
+    return {
+        "player_id": player_id,
+        "session_id": session_id,
+        "task_version": "earth_v1",
+        "sequence_index": sequence_index,
+        "sequence_length": sequence_length,
+        "attempt_index": attempt_index,
+        "presented": [1, 2, 3, 4],
+        "input": [1, 2, 3, 4] if is_correct else [4, 3, 2, 1],
+        "is_correct": is_correct,
+        "duration_ms": 5000,
+        "ts_utc": ts_utc,
+        "remediation_stage": "none",
+        "volts_count": None,
+    }
+
+
+def generate_demo_sessions(player_id: str):
+    """
+    Generate 5 demo sessions with varied outcomes (bad -> good progression).
+    Returns (success: bool, message: str, count: int).
+    """
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+
+    # Define session patterns: list of (session_suffix, events_pattern)
+    # events_pattern: list of (sequence_index, attempts_before_correct)
+    # attempts_before_correct: 0 = correct on 1st, 1 = correct on 2nd, 2 = correct on 3rd, 3 = never solved
+    session_patterns = [
+        # Session 1: Bad - all sequences need 3 attempts (fta=0.0, burden=3.0)
+        ("demo-001", [(1, 2), (2, 2), (3, 2)]),
+        # Session 2: Poor - mixed, mostly struggling (fta=0.33, burden=2.0)
+        ("demo-002", [(1, 0), (2, 1), (3, 2)]),
+        # Session 3: Medium - some struggle (fta=0.33, burden=2.0)
+        ("demo-003", [(1, 1), (2, 1), (3, 1)]),
+        # Session 4: Good - mostly first attempt (fta=0.66, burden=1.33)
+        ("demo-004", [(1, 0), (2, 0), (3, 1)]),
+        # Session 5: Excellent - all first attempt (fta=1.0, burden=1.0)
+        ("demo-005", [(1, 0), (2, 0), (3, 0)]),
+    ]
+
+    created_count = 0
+
+    for session_suffix, events_pattern in session_patterns:
+        session_id = f"{session_suffix}-{timestamp}"
+        base_time = datetime.now(timezone.utc)
+
+        # Generate events for each sequence
+        for seq_idx, attempts_before_correct in events_pattern:
+            # Post wrong attempts first
+            for attempt in range(1, attempts_before_correct + 1):
+                event_time = base_time.isoformat()
+                event = create_event(
+                    player_id=player_id,
+                    session_id=session_id,
+                    sequence_index=seq_idx,
+                    attempt_index=attempt,
+                    is_correct=False,
+                    ts_utc=event_time,
+                )
+                response = requests.post(f"{API_BASE_URL}/events", json=event, timeout=5)
+                if response.status_code != 200:
+                    return False, f"Failed to post event: {response.text}", created_count
+                time.sleep(0.05)
+
+            # Post correct attempt (attempt_index = attempts_before_correct + 1)
+            correct_attempt = attempts_before_correct + 1
+            if correct_attempt <= 3:  # Max 3 attempts allowed
+                event_time = base_time.isoformat()
+                event = create_event(
+                    player_id=player_id,
+                    session_id=session_id,
+                    sequence_index=seq_idx,
+                    attempt_index=correct_attempt,
+                    is_correct=True,
+                    ts_utc=event_time,
+                )
+                response = requests.post(f"{API_BASE_URL}/events", json=event, timeout=5)
+                if response.status_code != 200:
+                    return False, f"Failed to post event: {response.text}", created_count
+                time.sleep(0.05)
+
+        # Finalize session
+        response = requests.post(f"{API_BASE_URL}/sessions/{session_id}/finalize", timeout=5)
+        if response.status_code != 200:
+            return False, f"Failed to finalize session {session_id}: {response.text}", created_count
+
+        created_count += 1
+        time.sleep(0.1)
+
+    return True, f"Generated {created_count} demo sessions and retrained model.", created_count
+
+
 # Sidebar
 st.sidebar.header("Controls")
 
@@ -68,6 +188,25 @@ if st.sidebar.button("Load Sessions"):
             st.sidebar.warning("No sessions found for this player")
     else:
         st.sidebar.warning("Enter a player ID")
+
+if st.sidebar.button("Generate Demo Sessions"):
+    if not player_id:
+        st.sidebar.warning("Enter a player ID first")
+    elif not backend_ok:
+        st.sidebar.error("Backend is offline - cannot generate sessions")
+    else:
+        with st.spinner("Generating demo sessions..."):
+            success, message, count = generate_demo_sessions(player_id)
+        if success:
+            # Refresh sessions and player_id in session state
+            sessions = get_player_sessions(player_id)
+            if sessions:
+                st.session_state["sessions"] = sessions
+                st.session_state["player_id"] = player_id
+            st.sidebar.success(message)
+            st.rerun()
+        else:
+            st.error(message)
 
 # Main content
 if "sessions" in st.session_state and st.session_state["sessions"]:
@@ -147,6 +286,63 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
         use_container_width=True,
         hide_index=True,
     )
+
+    st.divider()
+
+    # Model State panel
+    st.subheader("Model State (Learning Brain)")
+    model_state = get_model_state(player_id)
+
+    if model_state is None:
+        st.info("No model state available for this player yet.")
+    elif "error" in model_state:
+        st.error(f"Failed to fetch model state: {model_state['error']}")
+    else:
+        status = model_state.get("status", "unknown")
+        n_samples = model_state.get("n_samples", 0)
+        is_trained = status == "trained"
+
+        # Format trained_ts_utc safely
+        trained_ts_raw = model_state.get("trained_ts_utc")
+        if trained_ts_raw:
+            trained_ts_display = trained_ts_raw
+        else:
+            trained_ts_display = "-"
+
+        # Always show status and samples
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.metric("Status", status)
+        with col_m2:
+            st.metric("Samples", n_samples)
+
+        if not is_trained:
+            st.info("Model not trained yet - finalize at least 3 sessions to enable learning.")
+        else:
+            # Show trained timestamp, MAE, and coefficients only when trained
+            st.markdown(f"**Last Trained:** `{trained_ts_display}`")
+
+            mae = model_state.get("mae")
+            mae_display = f"{mae:.4f}" if mae is not None else "-"
+            st.markdown(f"**MAE:** `{mae_display}`")
+
+            # Extract coefficients
+            coefficients = model_state.get("coefficients")
+            intercept = model_state.get("intercept")
+
+            weight_prev_fta = "-"
+            weight_prev_repetition_burden = "-"
+            if coefficients and isinstance(coefficients, list):
+                if len(coefficients) > 0:
+                    weight_prev_fta = f"{coefficients[0]:.6f}"
+                if len(coefficients) > 1:
+                    weight_prev_repetition_burden = f"{coefficients[1]:.6f}"
+
+            intercept_display = f"{intercept:.6f}" if intercept is not None else "-"
+
+            st.markdown(f"**weight_prev_fta:** `{weight_prev_fta}`")
+            st.markdown(f"**weight_prev_repetition_burden:** `{weight_prev_repetition_burden}`")
+            st.markdown(f"**intercept:** `{intercept_display}`")
 
 else:
     st.info("Enter a player ID in the sidebar and click 'Load Sessions' to view telemetry data.")
