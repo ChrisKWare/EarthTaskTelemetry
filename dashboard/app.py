@@ -1,4 +1,6 @@
 """Streamlit dashboard for Earth Task Telemetry."""
+import os
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -6,7 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # Configuration
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = os.getenv("API_BASE", "http://127.0.0.1:8000").rstrip("/")
 
 st.set_page_config(
     page_title="Earth Task Telemetry",
@@ -179,4 +181,5 @@ else:
 
 # Footer
 st.sidebar.divider()
+st.sidebar.caption(f"API: {API_BASE_URL}")
 st.sidebar.caption("Earth Task Telemetry v0.1.0")
