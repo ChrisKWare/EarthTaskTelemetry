@@ -43,3 +43,16 @@ class SessionSummaryResponse(BaseModel):
     repetition_burden: float
     earth_score_bucket: int
     created_ts_utc: str
+
+
+class ModelStateResponse(BaseModel):
+    """Response schema for model state."""
+    model_config = ConfigDict(from_attributes=True)
+
+    player_id: str
+    trained_ts_utc: str
+    n_samples: int
+    coefficients: Optional[List[float]] = None
+    intercept: Optional[float] = None
+    mae: Optional[float] = None
+    status: str

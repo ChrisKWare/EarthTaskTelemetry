@@ -34,3 +34,10 @@ htmlcov/
 
 # Streamlit
 .streamlit/
+
+# Claude Code / AI tooling
+.claude/
+
+# Windows artifacts
+nul
+

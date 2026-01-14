@@ -38,3 +38,17 @@ class SessionSummary(Base):
     repetition_burden = Column(Float, nullable=False)
     earth_score_bucket = Column(Integer, nullable=False)
     created_ts_utc = Column(String, nullable=False)
+
+
+class ModelState(Base):
+    """Stores trained model state for predicting next-session fta_level."""
+    __tablename__ = "model_state"
+
+    id = Column(Integer, primary_key=True, index=True)
+    player_id = Column(String, unique=True, index=True, nullable=False)
+    trained_ts_utc = Column(String, nullable=False)
+    n_samples = Column(Integer, nullable=False)
+    coefficients_json = Column(Text, nullable=True)  # JSON array of coefficients
+    intercept = Column(Float, nullable=True)
+    mae = Column(Float, nullable=True)
+    status = Column(String, nullable=False)  # "trained" or "insufficient_data"

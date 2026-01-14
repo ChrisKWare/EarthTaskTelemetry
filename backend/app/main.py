@@ -7,14 +7,16 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
-from .models import RawEvent, SessionSummary
+from .models import RawEvent, SessionSummary, ModelState
 from .schemas import (
     AttemptSubmitted,
     StoredResponse,
     HealthResponse,
     SessionSummaryResponse,
+    ModelStateResponse,
 )
 from .metrics import compute_session_metrics
+from .learner import retrain_player_model
 
 # Create tables on startup
 Base.metadata.create_all(bind=engine)
@@ -88,6 +90,9 @@ def finalize_session(session_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(summary)
 
+    # Retrain player model with updated session history
+    retrain_player_model(player_id, db)
+
     return summary
 
 
@@ -101,3 +106,29 @@ def get_player_sessions(player_id: str, db: Session = Depends(get_db)):
         .all()
     )
     return summaries
+
+
+@app.get("/model/state/{player_id}", response_model=ModelStateResponse)
+def get_model_state(player_id: str, db: Session = Depends(get_db)):
+    """Get the current model state for a player."""
+    model_state = db.query(ModelState).filter(
+        ModelState.player_id == player_id
+    ).first()
+
+    if not model_state:
+        raise HTTPException(status_code=404, detail="No model state found for player")
+
+    # Parse coefficients from JSON
+    coefficients = None
+    if model_state.coefficients_json:
+        coefficients = json.loads(model_state.coefficients_json)
+
+    return ModelStateResponse(
+        player_id=model_state.player_id,
+        trained_ts_utc=model_state.trained_ts_utc,
+        n_samples=model_state.n_samples,
+        coefficients=coefficients,
+        intercept=model_state.intercept,
+        mae=model_state.mae,
+        status=model_state.status,
+    )
