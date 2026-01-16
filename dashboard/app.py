@@ -344,6 +344,56 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
             st.markdown(f"**weight_prev_repetition_burden:** `{weight_prev_repetition_burden}`")
             st.markdown(f"**intercept:** `{intercept_display}`")
 
+    # Next-Session Prediction panel
+    st.divider()
+    st.subheader("Next-Session Prediction")
+
+    # Determine if we can compute a prediction
+    can_predict = False
+    prediction_reason = None
+
+    if model_state is None:
+        prediction_reason = "No model state available for this player yet."
+    elif "error" in model_state:
+        prediction_reason = f"Failed to fetch model state: {model_state['error']}"
+    elif model_state.get("status") != "trained":
+        prediction_reason = "Model not trained yet - finalize at least 3 sessions to enable predictions."
+    elif len(sessions) == 0:
+        prediction_reason = "No sessions available to base prediction on."
+    else:
+        coefficients = model_state.get("coefficients")
+        intercept = model_state.get("intercept")
+
+        if not coefficients or not isinstance(coefficients, list) or len(coefficients) < 2:
+            prediction_reason = "Model coefficients not available."
+        elif intercept is None:
+            prediction_reason = "Model intercept not available."
+        else:
+            latest_session = sessions[-1]
+            last_fta = latest_session.get("fta_level")
+            last_burden = latest_session.get("repetition_burden")
+
+            if last_fta is None or last_burden is None:
+                prediction_reason = "Latest session missing required fields (fta_level or repetition_burden)."
+            else:
+                can_predict = True
+
+    if can_predict:
+        # Compute prediction: y_hat = intercept + coef[0] * last_fta + coef[1] * last_burden
+        y_hat = intercept + coefficients[0] * last_fta + coefficients[1] * last_burden
+        # Clamp to valid FTA range [0.0, 1.0]
+        y_hat = max(0.0, min(1.0, y_hat))
+
+        col_p1, col_p2, col_p3 = st.columns(3)
+        with col_p1:
+            st.metric("Predicted Next-Session FTA", f"{y_hat:.2f}")
+        with col_p2:
+            st.metric("Last Actual FTA", f"{last_fta:.2f}")
+        with col_p3:
+            st.metric("Last Repetition Burden", f"{last_burden:.2f}")
+    else:
+        st.info(prediction_reason)
+
 else:
     st.info("Enter a player ID in the sidebar and click 'Load Sessions' to view telemetry data.")
 
