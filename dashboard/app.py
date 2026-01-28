@@ -25,7 +25,9 @@ def check_backend_health():
     """Check if backend is running."""
     try:
         response = requests.get(f"{API_BASE_URL}/health", timeout=2)
-        return response.status_code == 200 and response.json().get("ok")
+        data = response.json()
+        # Support both old {"ok": True} and new {"status": "ok"} formats
+        return response.status_code == 200 and (data.get("ok") or data.get("status") == "ok")
     except requests.exceptions.RequestException:
         return False
 
@@ -162,6 +164,9 @@ def generate_demo_sessions(player_id: str):
 # Sidebar
 st.sidebar.header("Controls")
 
+# Backend indicator
+st.sidebar.caption(f"Backend: {API_BASE_URL}")
+
 # Backend status
 backend_ok = check_backend_health()
 if backend_ok:
@@ -170,13 +175,24 @@ else:
     st.sidebar.error("❌ Backend offline")
     st.warning("Backend is not running. Start it with: `uvicorn backend.app.main:app --reload --port 8000`")
 
+# Get player_id from URL query param if present
+query_params = st.query_params
+url_player_id = query_params.get("player_id", None)
+
 # Player lookup
 st.sidebar.subheader("Player Lookup")
 player_id = st.sidebar.text_input(
     "Player ID",
-    value="a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    value=url_player_id if url_player_id else "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     help="Enter a player UUID to view their sessions",
 )
+
+# Auto-load sessions if player_id came from URL and not yet loaded
+if url_player_id and "sessions" not in st.session_state:
+    sessions = get_player_sessions(url_player_id)
+    if sessions:
+        st.session_state["sessions"] = sessions
+        st.session_state["player_id"] = url_player_id
 
 if st.sidebar.button("Load Sessions"):
     if player_id:
@@ -427,5 +443,4 @@ else:
 
 # Footer
 st.sidebar.divider()
-st.sidebar.caption(f"API: {API_BASE_URL}")
 st.sidebar.caption("Earth Task Telemetry v0.1.0")

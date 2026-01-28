@@ -1,9 +1,11 @@
 """FastAPI application for telemetry ingestion."""
 import json
+import os
 from datetime import datetime, timezone
 from typing import List
 
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
@@ -11,7 +13,6 @@ from .models import RawEvent, SessionSummary, ModelState
 from .schemas import (
     AttemptSubmitted,
     StoredResponse,
-    HealthResponse,
     SessionSummaryResponse,
     ModelStateResponse,
 )
@@ -23,11 +24,26 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Earth Task Telemetry API", version="0.1.0")
 
+# CORS configuration
+_allowed_origins_env = os.getenv("ALLOWED_ORIGINS")
+if _allowed_origins_env:
+    allowed_origins = [origin.strip() for origin in _allowed_origins_env.split(",")]
+else:
+    allowed_origins = ["http://localhost:8501"]
 
-@app.get("/health", response_model=HealthResponse)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
 def health_check():
     """Health check endpoint."""
-    return {"ok": True}
+    return {"status": "ok"}
 
 
 @app.post("/events", response_model=StoredResponse)
