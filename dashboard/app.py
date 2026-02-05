@@ -9,8 +9,23 @@ import requests
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Configuration
-API_BASE_URL = os.getenv("API_BASE", "http://127.0.0.1:8000").rstrip("/")
+# Configuration: prioritize Streamlit secrets, then env var, then localhost fallback
+def get_backend_url():
+    """Get backend URL from secrets, env var, or fallback to localhost."""
+    # Try Streamlit secrets first (for Streamlit Cloud deployment)
+    try:
+        if hasattr(st, "secrets") and "BACKEND_URL" in st.secrets:
+            return st.secrets["BACKEND_URL"].rstrip("/")
+    except Exception:
+        pass
+    # Try environment variable (legacy API_BASE or new BACKEND_URL)
+    env_url = os.getenv("BACKEND_URL") or os.getenv("API_BASE")
+    if env_url:
+        return env_url.rstrip("/")
+    # Fallback to localhost for local development
+    return "http://127.0.0.1:8000"
+
+API_BASE_URL = get_backend_url()
 
 st.set_page_config(
     page_title="Earth Task Telemetry",
@@ -22,9 +37,9 @@ st.title("🌍 Earth Task Telemetry Dashboard")
 
 
 def check_backend_health():
-    """Check if backend is running."""
+    """Check if backend is running (longer timeout for cloud cold starts)."""
     try:
-        response = requests.get(f"{API_BASE_URL}/health", timeout=2)
+        response = requests.get(f"{API_BASE_URL}/health", timeout=10)
         data = response.json()
         # Support both old {"ok": True} and new {"status": "ok"} formats
         return response.status_code == 200 and (data.get("ok") or data.get("status") == "ok")
@@ -164,16 +179,15 @@ def generate_demo_sessions(player_id: str):
 # Sidebar
 st.sidebar.header("Controls")
 
-# Backend indicator
-st.sidebar.caption(f"Backend: {API_BASE_URL}")
-
-# Backend status
+# Backend status indicator
 backend_ok = check_backend_health()
 if backend_ok:
-    st.sidebar.success("✅ Backend connected")
+    st.sidebar.markdown(f"**Backend:** :green_circle: Connected")
+    st.sidebar.caption(f"`{API_BASE_URL}`")
 else:
-    st.sidebar.error("❌ Backend offline")
-    st.warning("Backend is not running. Start it with: `uvicorn backend.app.main:app --reload --port 8000`")
+    st.sidebar.markdown(f"**Backend:** :red_circle: Unreachable")
+    st.sidebar.caption(f"`{API_BASE_URL}`")
+    st.warning("Backend unreachable (may be waking up or misconfigured). Refresh the page to retry.")
 
 # Get player_id from URL query param if present
 query_params = st.query_params
@@ -415,31 +429,26 @@ else:
 
     # Show instructions when no data
     st.subheader("Getting Started")
-    st.markdown("""
-    1. **Start the backend** (in a terminal):
-       ```
-       uvicorn backend.app.main:app --reload --port 8000
-       ```
+    if backend_ok:
+        st.markdown("""
+        **Quick Start:**
+        1. Click **"Generate Demo Sessions"** in the sidebar to create sample data
+        2. Or enter a known **Player ID** and click **"Load Sessions"**
 
-    2. **Load sample data** (in another terminal):
-       ```python
-       import requests
-       import json
+        The demo generator creates 5 sessions showing a learning progression from poor to excellent performance.
+        """)
+    else:
+        st.markdown("""
+        **Backend Unavailable**
 
-       with open("shared/sample_events.jsonl") as f:
-           for line in f:
-               event = json.loads(line)
-               requests.post("http://localhost:8000/events", json=event)
+        The backend API is currently unreachable. This could mean:
+        - The backend is starting up (cloud services may take 30-60 seconds on first request)
+        - There's a configuration issue with the backend URL
 
-       # Finalize the session
-       requests.post("http://localhost:8000/sessions/sess-001-2024-01-15/finalize")
-       ```
+        **Try:** Refresh this page in a few seconds.
 
-    3. **Enter the player ID** from sample data:
-       ```
-       a1b2c3d4-e5f6-7890-abcd-ef1234567890
-       ```
-    """)
+        *For developers:* See the project README for local setup instructions.
+        """)
 
 # Footer
 st.sidebar.divider()
