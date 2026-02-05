@@ -23,6 +23,7 @@ class RawEvent(Base):
     ts_utc = Column(String, nullable=False)
     remediation_stage = Column(String, nullable=False)
     volts_count = Column(Integer, nullable=True)
+    company_id = Column(String, index=True, nullable=True)
 
 
 class SessionSummary(Base):
@@ -38,6 +39,7 @@ class SessionSummary(Base):
     repetition_burden = Column(Float, nullable=False)
     earth_score_bucket = Column(Integer, nullable=False)
     created_ts_utc = Column(String, nullable=False)
+    company_id = Column(String, index=True, nullable=True)
 
 
 class ModelState(Base):

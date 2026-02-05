@@ -255,7 +255,7 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
         st.metric("Total Sessions", len(df))
     with col2:
         avg_fta = df["fta_level"].mean()
-        st.metric("Avg FTA Level", f"{avg_fta:.2%}")
+        st.metric("Avg Brain Performance Score", f"{avg_fta:.2%}")
     with col3:
         avg_burden = df["repetition_burden"].mean()
         st.metric("Avg Repetition Burden", f"{avg_burden:.2f}")
@@ -269,16 +269,17 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
     col_left, col_right = st.columns(2)
 
     with col_left:
-        st.subheader("FTA Level Over Sessions")
+        st.subheader("Brain Performance Score Over Sessions")
         fig_fta = px.line(
             df,
             x="created_ts_utc",
             y="fta_level",
             markers=True,
-            title="First-Time Accuracy Trend",
+            title="Brain Performance Score Trend",
+            color_discrete_sequence=["#7ed957"],
         )
         fig_fta.update_yaxes(range=[0, 1.1], tickformat=".0%")
-        fig_fta.update_layout(xaxis_title="Session Time", yaxis_title="FTA Level")
+        fig_fta.update_layout(xaxis_title="Session Time", yaxis_title="Brain Performance Score")
         st.plotly_chart(fig_fta, use_container_width=True)
 
     with col_right:

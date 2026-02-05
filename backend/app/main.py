@@ -15,9 +15,15 @@ from .schemas import (
     StoredResponse,
     SessionSummaryResponse,
     ModelStateResponse,
+    CompanyInfoResponse,
+    CompanySummaryResponse,
+    CompanyTimeseriesResponse,
+    CompanyTimeseriesBucket,
 )
 from .metrics import compute_session_metrics
 from .learner import retrain_player_model
+from .company import compute_company_id, resolve_token_to_company_id
+from .settings import MIN_COMPANY_N
 
 # Create tables on startup
 Base.metadata.create_all(bind=engine)
@@ -49,6 +55,11 @@ def health_check():
 @app.post("/events", response_model=StoredResponse)
 def ingest_event(event: AttemptSubmitted, db: Session = Depends(get_db)):
     """Ingest an AttemptSubmitted event."""
+    # Compute company_id if company_name provided but company_id not
+    company_id = event.company_id
+    if event.company_name and not company_id:
+        company_id = compute_company_id(event.company_name)
+
     raw_event = RawEvent(
         player_id=event.player_id,
         session_id=event.session_id,
@@ -63,6 +74,7 @@ def ingest_event(event: AttemptSubmitted, db: Session = Depends(get_db)):
         ts_utc=event.ts_utc,
         remediation_stage=event.remediation_stage,
         volts_count=event.volts_count,
+        company_id=company_id,
     )
     db.add(raw_event)
     db.commit()
@@ -84,9 +96,10 @@ def finalize_session(session_id: str, db: Session = Depends(get_db)):
     if not events:
         raise HTTPException(status_code=404, detail="No events found for session")
 
-    # Extract player_id and task_version from first event
+    # Extract player_id, task_version, and company_id from first event
     player_id = events[0].player_id
     task_version = events[0].task_version
+    company_id = events[0].company_id
 
     # Compute metrics
     metrics = compute_session_metrics(events)
@@ -101,6 +114,7 @@ def finalize_session(session_id: str, db: Session = Depends(get_db)):
         repetition_burden=metrics["repetition_burden"],
         earth_score_bucket=metrics["earth_score_bucket"],
         created_ts_utc=datetime.now(timezone.utc).isoformat(),
+        company_id=company_id,
     )
     db.add(summary)
     db.commit()
@@ -147,4 +161,157 @@ def get_model_state(player_id: str, db: Session = Depends(get_db)):
         intercept=model_state.intercept,
         mae=model_state.mae,
         status=model_state.status,
+    )
+
+
+# Company Dashboard Endpoints
+
+@app.get("/dashboard/company", response_model=CompanyInfoResponse)
+def get_company_info(t: str, db: Session = Depends(get_db)):
+    """Validate dashboard token and return company info with player count."""
+    company_id = resolve_token_to_company_id(t, db)
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Invalid dashboard token")
+
+    # Count unique players for this company
+    n_players = db.query(SessionSummary.player_id).filter(
+        SessionSummary.company_id == company_id
+    ).distinct().count()
+
+    has_sufficient = n_players >= MIN_COMPANY_N
+    if has_sufficient:
+        message = f"Company dashboard ready with {n_players} players."
+    else:
+        message = f"Insufficient players ({n_players}/{MIN_COMPANY_N}). Aggregates hidden for anonymity."
+
+    return CompanyInfoResponse(
+        company_id=company_id,
+        n_players=n_players,
+        has_sufficient_data=has_sufficient,
+        message=message,
+    )
+
+
+@app.get("/dashboard/summary", response_model=CompanySummaryResponse)
+def get_company_summary(t: str, db: Session = Depends(get_db)):
+    """Get aggregate stats for company. Blocked if insufficient players."""
+    company_id = resolve_token_to_company_id(t, db)
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Invalid dashboard token")
+
+    # Count unique players
+    n_players = db.query(SessionSummary.player_id).filter(
+        SessionSummary.company_id == company_id
+    ).distinct().count()
+
+    if n_players < MIN_COMPANY_N:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Insufficient players ({n_players}/{MIN_COMPANY_N}) for anonymity"
+        )
+
+    # Get all sessions for this company
+    sessions = db.query(SessionSummary).filter(
+        SessionSummary.company_id == company_id
+    ).all()
+
+    n_sessions = len(sessions)
+    if n_sessions == 0:
+        raise HTTPException(status_code=404, detail="No sessions found for company")
+
+    # Compute aggregates
+    avg_brain_performance_score = sum(s.fta_level for s in sessions) / n_sessions
+    avg_repetition_burden = sum(s.repetition_burden for s in sessions) / n_sessions
+    avg_earth_score_bucket = sum(s.earth_score_bucket for s in sessions) / n_sessions
+
+    return CompanySummaryResponse(
+        company_id=company_id,
+        n_players=n_players,
+        n_sessions=n_sessions,
+        avg_brain_performance_score=avg_brain_performance_score,
+        avg_repetition_burden=avg_repetition_burden,
+        avg_earth_score_bucket=avg_earth_score_bucket,
+    )
+
+
+@app.get("/dashboard/timeseries", response_model=CompanyTimeseriesResponse)
+def get_company_timeseries(t: str, bucket: str = "day", db: Session = Depends(get_db)):
+    """Get time-bucketed averages for company. Blocked if insufficient players."""
+    if bucket not in ("day", "week"):
+        raise HTTPException(status_code=400, detail="bucket must be 'day' or 'week'")
+
+    company_id = resolve_token_to_company_id(t, db)
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Invalid dashboard token")
+
+    # Count unique players
+    n_players = db.query(SessionSummary.player_id).filter(
+        SessionSummary.company_id == company_id
+    ).distinct().count()
+
+    if n_players < MIN_COMPANY_N:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Insufficient players ({n_players}/{MIN_COMPANY_N}) for anonymity"
+        )
+
+    # Get all sessions for this company, ordered by time
+    sessions = db.query(SessionSummary).filter(
+        SessionSummary.company_id == company_id
+    ).order_by(SessionSummary.created_ts_utc).all()
+
+    if not sessions:
+        return CompanyTimeseriesResponse(
+            company_id=company_id,
+            bucket_type=bucket,
+            buckets=[],
+        )
+
+    # Group sessions into buckets
+    from datetime import timedelta
+
+    buckets_dict = {}
+    for session in sessions:
+        # Parse timestamp
+        ts = datetime.fromisoformat(session.created_ts_utc.replace('Z', '+00:00'))
+
+        # Compute bucket start
+        if bucket == "day":
+            bucket_start = ts.replace(hour=0, minute=0, second=0, microsecond=0)
+            bucket_end = bucket_start + timedelta(days=1)
+        else:  # week
+            # Start of week (Monday)
+            days_since_monday = ts.weekday()
+            bucket_start = (ts - timedelta(days=days_since_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            bucket_end = bucket_start + timedelta(days=7)
+
+        bucket_key = bucket_start.isoformat()
+        if bucket_key not in buckets_dict:
+            buckets_dict[bucket_key] = {
+                "bucket_start": bucket_start.isoformat(),
+                "bucket_end": bucket_end.isoformat(),
+                "sessions": [],
+            }
+        buckets_dict[bucket_key]["sessions"].append(session)
+
+    # Compute averages for each bucket
+    result_buckets = []
+    for bucket_key in sorted(buckets_dict.keys()):
+        bucket_data = buckets_dict[bucket_key]
+        bucket_sessions = bucket_data["sessions"]
+        n = len(bucket_sessions)
+        result_buckets.append(CompanyTimeseriesBucket(
+            bucket_start=bucket_data["bucket_start"],
+            bucket_end=bucket_data["bucket_end"],
+            n_sessions=n,
+            avg_brain_performance_score=sum(s.fta_level for s in bucket_sessions) / n,
+            avg_repetition_burden=sum(s.repetition_burden for s in bucket_sessions) / n,
+        ))
+
+    return CompanyTimeseriesResponse(
+        company_id=company_id,
+        bucket_type=bucket,
+        buckets=result_buckets,
     )

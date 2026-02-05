@@ -18,6 +18,8 @@ class AttemptSubmitted(BaseModel):
     ts_utc: str
     remediation_stage: Literal["none", "volts", "space"]
     volts_count: Optional[int] = None
+    company_name: Optional[str] = None  # Raw name (NOT stored, used to compute company_id)
+    company_id: Optional[str] = None  # Pre-computed company ID (stored)
 
 
 class StoredResponse(BaseModel):
@@ -56,3 +58,37 @@ class ModelStateResponse(BaseModel):
     intercept: Optional[float] = None
     mae: Optional[float] = None
     status: str
+
+
+class CompanyInfoResponse(BaseModel):
+    """Response schema for company dashboard info."""
+    company_id: str
+    n_players: int
+    has_sufficient_data: bool
+    message: str
+
+
+class CompanySummaryResponse(BaseModel):
+    """Response schema for company aggregate stats."""
+    company_id: str
+    n_players: int
+    n_sessions: int
+    avg_brain_performance_score: float
+    avg_repetition_burden: float
+    avg_earth_score_bucket: float
+
+
+class CompanyTimeseriesBucket(BaseModel):
+    """Single bucket in company timeseries."""
+    bucket_start: str
+    bucket_end: str
+    n_sessions: int
+    avg_brain_performance_score: float
+    avg_repetition_burden: float
+
+
+class CompanyTimeseriesResponse(BaseModel):
+    """Response schema for company time series data."""
+    company_id: str
+    bucket_type: str  # "day" or "week"
+    buckets: List[CompanyTimeseriesBucket]
