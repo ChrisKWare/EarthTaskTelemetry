@@ -49,17 +49,22 @@ def compute_dashboard_token(company_id: str) -> str:
 def resolve_token_to_company_id(token: str, db: Session) -> Optional[str]:
     """Resolve a dashboard token to its company_id.
 
-    Iterates known company_ids in the database, computes expected token,
-    and returns matching company_id or None.
+    Checks company_ids from CompanyRegistry and SessionSummary,
+    computes expected token, and returns matching company_id or None.
     """
-    from .models import SessionSummary
+    from .models import CompanyRegistry, SessionSummary
 
-    # Get all distinct company_ids from the database
-    company_ids = db.query(SessionSummary.company_id).filter(
+    # Collect distinct company_ids from both sources
+    registry_ids = db.query(CompanyRegistry.company_id).distinct().all()
+    session_ids = db.query(SessionSummary.company_id).filter(
         SessionSummary.company_id.isnot(None)
     ).distinct().all()
 
-    for (company_id,) in company_ids:
+    seen = set()
+    for (company_id,) in registry_ids + session_ids:
+        if company_id in seen:
+            continue
+        seen.add(company_id)
         expected_token = compute_dashboard_token(company_id)
         if expected_token == token:
             return company_id

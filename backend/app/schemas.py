@@ -92,3 +92,16 @@ class CompanyTimeseriesResponse(BaseModel):
     company_id: str
     bucket_type: str  # "day" or "week"
     buckets: List[CompanyTimeseriesBucket]
+
+
+class SeedCompanyRequest(BaseModel):
+    """Request schema for seeding a company."""
+    company_name: str
+    company_id: Optional[str] = None
+
+
+class SeedCompanyResponse(BaseModel):
+    """Response schema for seeding a company."""
+    company_id: str
+    company_name: str
+    dashboard_token: str

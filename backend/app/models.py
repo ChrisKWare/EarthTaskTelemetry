@@ -42,6 +42,16 @@ class SessionSummary(Base):
     company_id = Column(String, index=True, nullable=True)
 
 
+class CompanyRegistry(Base):
+    """Registry of known companies for token validation."""
+    __tablename__ = "company_registry"
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(String, unique=True, index=True, nullable=False)
+    company_name = Column(String, nullable=False)
+    created_ts_utc = Column(String, nullable=False)
+
+
 class ModelState(Base):
     """Stores trained model state for predicting next-session fta_level."""
     __tablename__ = "model_state"

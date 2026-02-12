@@ -1,4 +1,6 @@
 """Tests for company dashboard endpoints."""
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -344,3 +346,119 @@ class TestCompanyIdPropagation:
         response = client.get("/dashboard/company", params={"t": token})
         assert response.status_code == 200
         assert response.json()["company_id"] == expected_company_id
+
+
+class TestAdminSeedCompany:
+    """Tests for POST /admin/seed_company endpoint."""
+
+    ADMIN_KEY = "test-admin-key-123"
+
+    @pytest.fixture(autouse=True)
+    def _set_admin_key(self, monkeypatch):
+        """Set the ADMIN_KEY for the duration of each test."""
+        import backend.app.settings as settings
+        import backend.app.main as main_mod
+
+        monkeypatch.setattr(settings, "ADMIN_KEY", self.ADMIN_KEY)
+        monkeypatch.setattr(main_mod, "ADMIN_KEY", self.ADMIN_KEY)
+
+    def test_seed_company_missing_header(self, client):
+        """Request without X-ADMIN-KEY header returns 422 (missing required header)."""
+        response = client.post(
+            "/admin/seed_company",
+            json={"company_name": "Google"},
+        )
+        assert response.status_code == 422
+
+    def test_seed_company_wrong_key(self, client):
+        """Request with wrong admin key returns 403."""
+        response = client.post(
+            "/admin/seed_company",
+            json={"company_name": "Google"},
+            headers={"X-ADMIN-KEY": "wrong-key"},
+        )
+        assert response.status_code == 403
+
+    def test_seed_company_success(self, client):
+        """Valid seed request creates registry entry and returns token."""
+        response = client.post(
+            "/admin/seed_company",
+            json={"company_name": "Google"},
+            headers={"X-ADMIN-KEY": self.ADMIN_KEY},
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        expected_id = compute_company_id("Google")
+        expected_token = compute_dashboard_token(expected_id)
+
+        assert data["company_id"] == expected_id
+        assert data["company_name"] == "Google"
+        assert data["dashboard_token"] == expected_token
+
+    def test_seed_company_with_explicit_company_id(self, client):
+        """Seed with explicit company_id uses that id instead of computing."""
+        response = client.post(
+            "/admin/seed_company",
+            json={"company_name": "Custom Co", "company_id": "c_custom123456"},
+            headers={"X-ADMIN-KEY": self.ADMIN_KEY},
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["company_id"] == "c_custom123456"
+        assert data["dashboard_token"] == compute_dashboard_token("c_custom123456")
+
+    def test_seed_company_upsert(self, client):
+        """Seeding the same company_id twice updates the name."""
+        headers = {"X-ADMIN-KEY": self.ADMIN_KEY}
+
+        # First seed
+        client.post(
+            "/admin/seed_company",
+            json={"company_name": "OldName"},
+            headers=headers,
+        )
+        # Second seed with same computed company_id
+        response = client.post(
+            "/admin/seed_company",
+            json={"company_name": "OldName"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    def test_seed_enables_token_resolution(self, client):
+        """After seeding, the dashboard token resolves without any gameplay data."""
+        headers = {"X-ADMIN-KEY": self.ADMIN_KEY}
+
+        # Seed a company
+        seed_resp = client.post(
+            "/admin/seed_company",
+            json={"company_name": "FreshCo"},
+            headers=headers,
+        )
+        token = seed_resp.json()["dashboard_token"]
+
+        # Dashboard should resolve the token (0 players, but no 403)
+        dash_resp = client.get("/dashboard/company", params={"t": token})
+        assert dash_resp.status_code == 200
+        data = dash_resp.json()
+
+        assert data["company_id"] == compute_company_id("FreshCo")
+        assert data["n_players"] == 0
+        assert data["has_sufficient_data"] is False
+
+    def test_seed_rejected_when_admin_key_unset(self, client, monkeypatch):
+        """If ADMIN_KEY env var is empty, all requests are rejected."""
+        import backend.app.settings as settings
+        import backend.app.main as main_mod
+
+        monkeypatch.setattr(settings, "ADMIN_KEY", "")
+        monkeypatch.setattr(main_mod, "ADMIN_KEY", "")
+
+        response = client.post(
+            "/admin/seed_company",
+            json={"company_name": "Google"},
+            headers={"X-ADMIN-KEY": "anything"},
+        )
+        assert response.status_code == 403

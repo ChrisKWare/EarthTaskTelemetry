@@ -12,3 +12,6 @@ DASHBOARD_TOKEN_SALT = os.getenv("DASHBOARD_TOKEN_SALT", "dev-dashboard-token-sa
 
 # Minimum unique players before showing company aggregates (anonymity threshold)
 MIN_COMPANY_N = int(os.getenv("MIN_COMPANY_N", "5"))
+
+# Admin API key for privileged endpoints (must be set in production)
+ADMIN_KEY = os.getenv("ADMIN_KEY", "")

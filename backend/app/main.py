@@ -4,12 +4,12 @@ import os
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
-from .models import RawEvent, SessionSummary, ModelState
+from .models import RawEvent, SessionSummary, ModelState, CompanyRegistry
 from .schemas import (
     AttemptSubmitted,
     StoredResponse,
@@ -19,11 +19,13 @@ from .schemas import (
     CompanySummaryResponse,
     CompanyTimeseriesResponse,
     CompanyTimeseriesBucket,
+    SeedCompanyRequest,
+    SeedCompanyResponse,
 )
 from .metrics import compute_session_metrics
 from .learner import retrain_player_model
-from .company import compute_company_id, resolve_token_to_company_id
-from .settings import MIN_COMPANY_N
+from .company import compute_company_id, compute_dashboard_token, resolve_token_to_company_id
+from .settings import ADMIN_KEY, MIN_COMPANY_N
 
 # Create tables on startup
 Base.metadata.create_all(bind=engine)
@@ -314,4 +316,46 @@ def get_company_timeseries(t: str, bucket: str = "day", db: Session = Depends(ge
         company_id=company_id,
         bucket_type=bucket,
         buckets=result_buckets,
+    )
+
+
+# Admin Endpoints
+
+@app.post("/admin/seed_company", response_model=SeedCompanyResponse)
+def seed_company(
+    body: SeedCompanyRequest,
+    db: Session = Depends(get_db),
+    x_admin_key: str = Header(...),
+):
+    """Register a company for dashboard token validation.
+
+    Requires X-ADMIN-KEY header matching the ADMIN_KEY env var.
+    Upserts into CompanyRegistry so the company_id is available for
+    token resolution even before gameplay data arrives.
+    """
+    if not ADMIN_KEY or x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing admin key")
+
+    company_id = body.company_id or compute_company_id(body.company_name)
+
+    existing = db.query(CompanyRegistry).filter(
+        CompanyRegistry.company_id == company_id
+    ).first()
+
+    if existing:
+        existing.company_name = body.company_name
+    else:
+        registry_entry = CompanyRegistry(
+            company_id=company_id,
+            company_name=body.company_name,
+            created_ts_utc=datetime.now(timezone.utc).isoformat(),
+        )
+        db.add(registry_entry)
+
+    db.commit()
+
+    return SeedCompanyResponse(
+        company_id=company_id,
+        company_name=body.company_name,
+        dashboard_token=compute_dashboard_token(company_id),
     )
