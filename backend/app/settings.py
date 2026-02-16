@@ -4,7 +4,7 @@ from pathlib import Path
 
 # Database file lives at repo root
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DATABASE_URL = f"sqlite:///{REPO_ROOT / 'telemetry.db'}"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{REPO_ROOT / 'telemetry.db'}")
 
 # Company identity hashing salts (MUST be changed in production)
 COMPANY_SALT = os.getenv("COMPANY_SALT", "dev-company-salt-change-in-prod")

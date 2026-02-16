@@ -37,6 +37,7 @@ htmlcov/
 
 # Claude Code / AI tooling
 .claude/
+claude-*-cwd
 
 # Windows artifacts
 nul
