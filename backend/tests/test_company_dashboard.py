@@ -348,6 +348,84 @@ class TestCompanyIdPropagation:
         assert response.json()["company_id"] == expected_company_id
 
 
+class TestFinalizeCompanyIdValidation:
+    """Tests for company_id consistency check during session finalization."""
+
+    def test_finalize_rejects_mixed_company_ids(self, client):
+        """Finalize returns 400 when events have different company_ids."""
+        session_id = "session-mixed"
+
+        # First two events with company A
+        for seq in [1, 2]:
+            event = create_event(
+                player_id="player-mix",
+                session_id=session_id,
+                sequence_index=seq,
+                attempt_index=1,
+                is_correct=True,
+                company_id="c_aaaaaaaaaaaa",
+            )
+            client.post("/events", json=event)
+
+        # Third event with company B
+        event = create_event(
+            player_id="player-mix",
+            session_id=session_id,
+            sequence_index=3,
+            attempt_index=1,
+            is_correct=True,
+            company_id="c_bbbbbbbbbbbb",
+        )
+        client.post("/events", json=event)
+
+        response = client.post(f"/sessions/{session_id}/finalize")
+        assert response.status_code == 400
+        assert "Mixed company_ids" in response.json()["detail"]
+
+    def test_finalize_accepts_consistent_company_ids(self, client):
+        """Finalize succeeds when all events share the same company_id."""
+        company_id = compute_company_id("ConsistentCo")
+        session_id = "session-consistent"
+
+        for seq in [1, 2, 3]:
+            event = create_event(
+                player_id="player-con",
+                session_id=session_id,
+                sequence_index=seq,
+                attempt_index=1,
+                is_correct=True,
+                company_id=company_id,
+            )
+            client.post("/events", json=event)
+
+        response = client.post(f"/sessions/{session_id}/finalize")
+        assert response.status_code == 200
+
+    def test_finalize_auto_registers_company(self, client):
+        """Finalize creates a CompanyRegistry entry so token resolves via DB."""
+        company_id = compute_company_id("AutoRegCo")
+        session_id = "session-autoreg"
+
+        for seq in [1, 2, 3]:
+            event = create_event(
+                player_id="player-ar",
+                session_id=session_id,
+                sequence_index=seq,
+                attempt_index=1,
+                is_correct=True,
+                company_id=company_id,
+            )
+            client.post("/events", json=event)
+
+        client.post(f"/sessions/{session_id}/finalize")
+
+        # Token should resolve without any admin seed
+        token = compute_dashboard_token(company_id)
+        response = client.get("/dashboard/company", params={"t": token})
+        assert response.status_code == 200
+        assert response.json()["company_id"] == company_id
+
+
 class TestAdminSeedCompany:
     """Tests for POST /admin/seed_company endpoint."""
 

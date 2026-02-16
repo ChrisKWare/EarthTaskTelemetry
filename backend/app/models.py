@@ -49,6 +49,7 @@ class CompanyRegistry(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(String, unique=True, index=True, nullable=False)
     company_name = Column(String, nullable=False)
+    dashboard_token = Column(String, index=True, nullable=False)
     created_ts_utc = Column(String, nullable=False)
 
 

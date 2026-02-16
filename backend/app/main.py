@@ -103,6 +103,28 @@ def finalize_session(session_id: str, db: Session = Depends(get_db)):
     task_version = events[0].task_version
     company_id = events[0].company_id
 
+    # Validate all events share the same company_id
+    mismatched = [e for e in events if e.company_id != company_id]
+    if mismatched:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Mixed company_ids in session: expected {company_id!r}, "
+                   f"found {mismatched[0].company_id!r}",
+        )
+
+    # Ensure company is registered (so dashboard token resolves via DB lookup)
+    if company_id:
+        existing_reg = db.query(CompanyRegistry).filter(
+            CompanyRegistry.company_id == company_id
+        ).first()
+        if not existing_reg:
+            db.add(CompanyRegistry(
+                company_id=company_id,
+                company_name=company_id,  # placeholder; admin can update via seed
+                dashboard_token=compute_dashboard_token(company_id),
+                created_ts_utc=datetime.now(timezone.utc).isoformat(),
+            ))
+
     # Compute metrics
     metrics = compute_session_metrics(events)
 
@@ -337,6 +359,7 @@ def seed_company(
         raise HTTPException(status_code=403, detail="Invalid or missing admin key")
 
     company_id = body.company_id or compute_company_id(body.company_name)
+    dashboard_token = compute_dashboard_token(company_id)
 
     existing = db.query(CompanyRegistry).filter(
         CompanyRegistry.company_id == company_id
@@ -344,10 +367,12 @@ def seed_company(
 
     if existing:
         existing.company_name = body.company_name
+        existing.dashboard_token = dashboard_token
     else:
         registry_entry = CompanyRegistry(
             company_id=company_id,
             company_name=body.company_name,
+            dashboard_token=dashboard_token,
             created_ts_utc=datetime.now(timezone.utc).isoformat(),
         )
         db.add(registry_entry)
@@ -357,5 +382,5 @@ def seed_company(
     return SeedCompanyResponse(
         company_id=company_id,
         company_name=body.company_name,
-        dashboard_token=compute_dashboard_token(company_id),
+        dashboard_token=dashboard_token,
     )
