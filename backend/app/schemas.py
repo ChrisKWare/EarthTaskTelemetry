@@ -22,6 +22,12 @@ class AttemptSubmitted(BaseModel):
     company_id: Optional[str] = None  # Pre-computed company ID (stored)
 
 
+class FinalizeSessionRequest(BaseModel):
+    """Optional request body for session finalization."""
+    task_version: Optional[str] = None
+    calmness_score: Optional[float] = None
+
+
 class StoredResponse(BaseModel):
     """Response for event storage."""
     stored: bool
@@ -40,11 +46,12 @@ class SessionSummaryResponse(BaseModel):
     player_id: str
     session_id: str
     task_version: str
-    fta_level: float
-    fta_strict: bool
-    repetition_burden: float
-    earth_score_bucket: int
+    fta_level: Optional[float] = None
+    fta_strict: Optional[bool] = None
+    repetition_burden: Optional[float] = None
+    earth_score_bucket: Optional[int] = None
     created_ts_utc: str
+    calmness_score: Optional[float] = None
 
 
 class ModelStateResponse(BaseModel):
@@ -52,6 +59,7 @@ class ModelStateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     player_id: str
+    model_name: str = "earth"
     trained_ts_utc: str
     n_samples: int
     coefficients: Optional[List[float]] = None
@@ -66,6 +74,7 @@ class CompanyInfoResponse(BaseModel):
     n_players: int
     has_sufficient_data: bool
     message: str
+    player_ids: List[str] = []
 
 
 class CompanySummaryResponse(BaseModel):
@@ -73,9 +82,11 @@ class CompanySummaryResponse(BaseModel):
     company_id: str
     n_players: int
     n_sessions: int
-    avg_brain_performance_score: float
-    avg_repetition_burden: float
-    avg_earth_score_bucket: float
+    avg_brain_performance_score: Optional[float] = None
+    avg_repetition_burden: Optional[float] = None
+    avg_earth_score_bucket: Optional[float] = None
+    n_water_sessions: int = 0
+    avg_calmness_score: Optional[float] = None
 
 
 class CompanyTimeseriesBucket(BaseModel):
@@ -83,8 +94,10 @@ class CompanyTimeseriesBucket(BaseModel):
     bucket_start: str
     bucket_end: str
     n_sessions: int
-    avg_brain_performance_score: float
-    avg_repetition_burden: float
+    avg_brain_performance_score: Optional[float] = None
+    avg_repetition_burden: Optional[float] = None
+    n_water_sessions: int = 0
+    avg_calmness_score: Optional[float] = None
 
 
 class CompanyTimeseriesResponse(BaseModel):

@@ -205,6 +205,7 @@ class TestCompanyDashboardEndpoints:
         assert data["company_id"] == company_id
         assert data["n_players"] == 3
         assert data["has_sufficient_data"] is False
+        assert data["player_ids"] == []
 
     def test_dashboard_company_valid_token_sufficient_players(self, client):
         """Test /dashboard/company with valid token and >= 5 players."""
@@ -218,6 +219,7 @@ class TestCompanyDashboardEndpoints:
         assert data["company_id"] == company_id
         assert data["n_players"] == 5
         assert data["has_sufficient_data"] is True
+        assert len(data["player_ids"]) == 5
 
     def test_dashboard_summary_invalid_token(self, client):
         """Test /dashboard/summary returns 403 for invalid token."""
@@ -525,6 +527,7 @@ class TestAdminSeedCompany:
         assert data["company_id"] == compute_company_id("FreshCo")
         assert data["n_players"] == 0
         assert data["has_sufficient_data"] is False
+        assert data["player_ids"] == []
 
     def test_seed_rejected_when_admin_key_unset(self, client, monkeypatch):
         """If ADMIN_KEY env var is empty, all requests are rejected."""
@@ -540,3 +543,159 @@ class TestAdminSeedCompany:
             headers={"X-ADMIN-KEY": "anything"},
         )
         assert response.status_code == 403
+
+
+class TestCompanyWaterMetrics:
+    """Tests for water (calmness) metrics in company dashboard endpoints."""
+
+    def _create_water_event(self, player_id, session_id, seq, company_id):
+        """Helper to create a water_v1 event payload."""
+        return {
+            "player_id": player_id,
+            "session_id": session_id,
+            "task_version": "water_v1",
+            "sequence_index": seq,
+            "sequence_length": 4,
+            "attempt_index": 1,
+            "presented": [1, 2, 3, 4],
+            "input": [1, 2, 3, 4],
+            "is_correct": True,
+            "duration_ms": 5000,
+            "ts_utc": "2024-01-15T10:00:00Z",
+            "remediation_stage": "none",
+            "volts_count": None,
+            "company_id": company_id,
+        }
+
+    def _create_company_with_water(self, client, company_name, n_players,
+                                    n_water_players=0, calmness_scores=None):
+        """Create earth + water sessions for a company.
+
+        First n_players each get one earth session.
+        First n_water_players of those also get one water session.
+        """
+        company_id = compute_company_id(company_name)
+
+        for i in range(n_players):
+            player_id = f"player-{company_name}-{i}"
+
+            # Earth session
+            earth_sid = f"earth-{company_name}-{i}"
+            for seq in [1, 2, 3]:
+                event = create_event(
+                    player_id=player_id,
+                    session_id=earth_sid,
+                    sequence_index=seq,
+                    attempt_index=1,
+                    is_correct=True,
+                    company_id=company_id,
+                )
+                client.post("/events", json=event)
+            client.post(f"/sessions/{earth_sid}/finalize")
+
+            # Water session for the first n_water_players
+            if i < n_water_players:
+                water_sid = f"water-{company_name}-{i}"
+                for seq in [1, 2, 3]:
+                    event = self._create_water_event(
+                        player_id, water_sid, seq, company_id
+                    )
+                    client.post("/events", json=event)
+                score = calmness_scores[i] if calmness_scores else 0.5 + i * 0.1
+                client.post(
+                    f"/sessions/{water_sid}/finalize",
+                    json={"task_version": "water_v1", "calmness_score": score},
+                )
+
+        return company_id
+
+    def test_summary_includes_water_metrics(self, client):
+        """Summary returns avg_calmness_score when water sessions exist."""
+        company_id = self._create_company_with_water(
+            client, "WaterCo", n_players=5, n_water_players=3,
+            calmness_scores=[0.6, 0.7, 0.8],
+        )
+        token = compute_dashboard_token(company_id)
+
+        response = client.get("/dashboard/summary", params={"t": token})
+        assert response.status_code == 200
+        data = response.json()
+
+        # Earth metrics still present (all 5 earth sessions)
+        assert data["avg_brain_performance_score"] == 1.0
+        assert data["n_sessions"] == 8  # 5 earth + 3 water
+
+        # Water metrics
+        assert data["n_water_sessions"] == 3
+        expected_avg = (0.6 + 0.7 + 0.8) / 3
+        assert abs(data["avg_calmness_score"] - expected_avg) < 0.001
+
+    def test_summary_no_water_sessions(self, client):
+        """Summary returns null calmness when no water sessions exist."""
+        company_id = self._create_company_with_water(
+            client, "EarthOnlyCo", n_players=5, n_water_players=0,
+        )
+        token = compute_dashboard_token(company_id)
+
+        response = client.get("/dashboard/summary", params={"t": token})
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["avg_brain_performance_score"] == 1.0
+        assert data["n_water_sessions"] == 0
+        assert data["avg_calmness_score"] is None
+
+    def test_timeseries_includes_calmness(self, client):
+        """Timeseries buckets include avg_calmness_score."""
+        company_id = self._create_company_with_water(
+            client, "TimeWaterCo", n_players=5, n_water_players=2,
+            calmness_scores=[0.5, 0.9],
+        )
+        token = compute_dashboard_token(company_id)
+
+        response = client.get(
+            "/dashboard/timeseries",
+            params={"t": token, "bucket": "day"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert len(data["buckets"]) >= 1
+        bucket = data["buckets"][0]
+
+        # Earth metrics present
+        assert bucket["avg_brain_performance_score"] is not None
+
+        # Water metrics present
+        assert bucket["n_water_sessions"] == 2
+        expected_avg = (0.5 + 0.9) / 2
+        assert abs(bucket["avg_calmness_score"] - expected_avg) < 0.001
+
+    def test_summary_water_only_company(self, client):
+        """Company with only water sessions returns null earth, valid calmness."""
+        company_id = compute_company_id("PureWaterCo")
+
+        # Create 5 players, each with a water session only
+        for i in range(5):
+            player_id = f"player-PureWaterCo-{i}"
+            water_sid = f"water-PureWaterCo-{i}"
+            for seq in [1, 2, 3]:
+                event = self._create_water_event(
+                    player_id, water_sid, seq, company_id
+                )
+                client.post("/events", json=event)
+            client.post(
+                f"/sessions/{water_sid}/finalize",
+                json={"task_version": "water_v1", "calmness_score": 0.5 + i * 0.1},
+            )
+
+        token = compute_dashboard_token(company_id)
+        response = client.get("/dashboard/summary", params={"t": token})
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["n_players"] == 5
+        assert data["avg_brain_performance_score"] is None
+        assert data["avg_repetition_burden"] is None
+        assert data["n_water_sessions"] == 5
+        assert data["avg_calmness_score"] is not None

@@ -2,16 +2,17 @@
 import json
 import os
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import Body, FastAPI, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from .db import Base, engine, get_db
+from .db import Base, engine, get_db, ensure_schema
 from .models import RawEvent, SessionSummary, ModelState, CompanyRegistry
 from .schemas import (
     AttemptSubmitted,
+    FinalizeSessionRequest,
     StoredResponse,
     SessionSummaryResponse,
     ModelStateResponse,
@@ -27,8 +28,8 @@ from .learner import retrain_player_model
 from .company import compute_company_id, compute_dashboard_token, resolve_token_to_company_id
 from .settings import ADMIN_KEY, MIN_COMPANY_N
 
-# Create tables on startup
-Base.metadata.create_all(bind=engine)
+# Validate schema and create tables on startup
+ensure_schema()
 
 app = FastAPI(title="Earth Task Telemetry API", version="0.1.0")
 
@@ -84,7 +85,11 @@ def ingest_event(event: AttemptSubmitted, db: Session = Depends(get_db)):
 
 
 @app.post("/sessions/{session_id}/finalize", response_model=SessionSummaryResponse)
-def finalize_session(session_id: str, db: Session = Depends(get_db)):
+def finalize_session(
+    session_id: str,
+    body: Optional[FinalizeSessionRequest] = Body(None),
+    db: Session = Depends(get_db),
+):
     """Compute and store session summary metrics."""
     # Check if already finalized
     existing = db.query(SessionSummary).filter(
@@ -98,10 +103,18 @@ def finalize_session(session_id: str, db: Session = Depends(get_db)):
     if not events:
         raise HTTPException(status_code=404, detail="No events found for session")
 
-    # Extract player_id, task_version, and company_id from first event
+    # Extract player_id and company_id from first event
     player_id = events[0].player_id
-    task_version = events[0].task_version
     company_id = events[0].company_id
+
+    # Validate all events share the same player_id
+    mismatched_players = [e for e in events if e.player_id != player_id]
+    if mismatched_players:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Mixed player_ids in session: expected {player_id!r}, "
+                   f"found {mismatched_players[0].player_id!r}",
+        )
 
     # Validate all events share the same company_id
     mismatched = [e for e in events if e.company_id != company_id]
@@ -125,27 +138,59 @@ def finalize_session(session_id: str, db: Session = Depends(get_db)):
                 created_ts_utc=datetime.now(timezone.utc).isoformat(),
             ))
 
-    # Compute metrics
-    metrics = compute_session_metrics(events)
-
-    # Create summary
-    summary = SessionSummary(
-        player_id=player_id,
-        session_id=session_id,
-        task_version=task_version,
-        fta_level=metrics["fta_level"],
-        fta_strict=metrics["fta_strict"],
-        repetition_burden=metrics["repetition_burden"],
-        earth_score_bucket=metrics["earth_score_bucket"],
-        created_ts_utc=datetime.now(timezone.utc).isoformat(),
-        company_id=company_id,
+    # Determine effective task version
+    effective_task_version = (
+        body.task_version
+        if body and body.task_version
+        else events[0].task_version
     )
-    db.add(summary)
-    db.commit()
-    db.refresh(summary)
 
-    # Retrain player model with updated session history
-    retrain_player_model(player_id, db)
+    if effective_task_version == "water_v1":
+        # Water path: require calmness_score
+        if not body or body.calmness_score is None:
+            raise HTTPException(
+                status_code=400,
+                detail="water_v1 sessions require calmness_score in request body",
+            )
+
+        summary = SessionSummary(
+            player_id=player_id,
+            session_id=session_id,
+            task_version="water_v1",
+            fta_level=None,
+            fta_strict=None,
+            repetition_burden=None,
+            earth_score_bucket=None,
+            created_ts_utc=datetime.now(timezone.utc).isoformat(),
+            company_id=company_id,
+            calmness_score=body.calmness_score,
+        )
+        db.add(summary)
+        db.commit()
+        db.refresh(summary)
+
+        retrain_player_model(player_id, db, model_name="water")
+    else:
+        # Earth path (default): compute metrics
+        metrics = compute_session_metrics(events)
+
+        summary = SessionSummary(
+            player_id=player_id,
+            session_id=session_id,
+            task_version=effective_task_version,
+            fta_level=metrics["fta_level"],
+            fta_strict=metrics["fta_strict"],
+            repetition_burden=metrics["repetition_burden"],
+            earth_score_bucket=metrics["earth_score_bucket"],
+            created_ts_utc=datetime.now(timezone.utc).isoformat(),
+            company_id=company_id,
+            calmness_score=None,
+        )
+        db.add(summary)
+        db.commit()
+        db.refresh(summary)
+
+        retrain_player_model(player_id, db, model_name="earth")
 
     return summary
 
@@ -163,10 +208,11 @@ def get_player_sessions(player_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/model/state/{player_id}", response_model=ModelStateResponse)
-def get_model_state(player_id: str, db: Session = Depends(get_db)):
+def get_model_state(player_id: str, model_name: str = "earth", db: Session = Depends(get_db)):
     """Get the current model state for a player."""
     model_state = db.query(ModelState).filter(
-        ModelState.player_id == player_id
+        ModelState.player_id == player_id,
+        ModelState.model_name == model_name,
     ).first()
 
     if not model_state:
@@ -179,6 +225,7 @@ def get_model_state(player_id: str, db: Session = Depends(get_db)):
 
     return ModelStateResponse(
         player_id=model_state.player_id,
+        model_name=model_state.model_name,
         trained_ts_utc=model_state.trained_ts_utc,
         n_samples=model_state.n_samples,
         coefficients=coefficients,
@@ -208,11 +255,19 @@ def get_company_info(t: str, db: Session = Depends(get_db)):
     else:
         message = f"Insufficient players ({n_players}/{MIN_COMPANY_N}). Aggregates hidden for anonymity."
 
+    player_ids_list = []
+    if has_sufficient:
+        rows = db.query(SessionSummary.player_id).filter(
+            SessionSummary.company_id == company_id
+        ).distinct().all()
+        player_ids_list = [r[0] for r in rows]
+
     return CompanyInfoResponse(
         company_id=company_id,
         n_players=n_players,
         has_sufficient_data=has_sufficient,
         message=message,
+        player_ids=player_ids_list,
     )
 
 
@@ -243,10 +298,25 @@ def get_company_summary(t: str, db: Session = Depends(get_db)):
     if n_sessions == 0:
         raise HTTPException(status_code=404, detail="No sessions found for company")
 
-    # Compute aggregates
-    avg_brain_performance_score = sum(s.fta_level for s in sessions) / n_sessions
-    avg_repetition_burden = sum(s.repetition_burden for s in sessions) / n_sessions
-    avg_earth_score_bucket = sum(s.earth_score_bucket for s in sessions) / n_sessions
+    # Split by task type
+    earth_sessions = [s for s in sessions if s.fta_level is not None]
+    water_sessions = [s for s in sessions if s.calmness_score is not None]
+
+    # Compute earth aggregates
+    avg_brain_performance_score = None
+    avg_repetition_burden = None
+    avg_earth_score_bucket = None
+    if earth_sessions:
+        n_earth = len(earth_sessions)
+        avg_brain_performance_score = sum(s.fta_level for s in earth_sessions) / n_earth
+        avg_repetition_burden = sum(s.repetition_burden for s in earth_sessions) / n_earth
+        avg_earth_score_bucket = sum(s.earth_score_bucket for s in earth_sessions) / n_earth
+
+    # Compute water aggregates
+    avg_calmness_score = None
+    n_water = len(water_sessions)
+    if water_sessions:
+        avg_calmness_score = sum(s.calmness_score for s in water_sessions) / n_water
 
     return CompanySummaryResponse(
         company_id=company_id,
@@ -255,6 +325,8 @@ def get_company_summary(t: str, db: Session = Depends(get_db)):
         avg_brain_performance_score=avg_brain_performance_score,
         avg_repetition_burden=avg_repetition_burden,
         avg_earth_score_bucket=avg_earth_score_bucket,
+        n_water_sessions=n_water,
+        avg_calmness_score=avg_calmness_score,
     )
 
 
@@ -326,12 +398,30 @@ def get_company_timeseries(t: str, bucket: str = "day", db: Session = Depends(ge
         bucket_data = buckets_dict[bucket_key]
         bucket_sessions = bucket_data["sessions"]
         n = len(bucket_sessions)
+
+        earth_in_bucket = [s for s in bucket_sessions if s.fta_level is not None]
+        water_in_bucket = [s for s in bucket_sessions if s.calmness_score is not None]
+
+        avg_bps = None
+        avg_burden = None
+        if earth_in_bucket:
+            n_earth = len(earth_in_bucket)
+            avg_bps = sum(s.fta_level for s in earth_in_bucket) / n_earth
+            avg_burden = sum(s.repetition_burden for s in earth_in_bucket) / n_earth
+
+        avg_calmness = None
+        n_water = len(water_in_bucket)
+        if water_in_bucket:
+            avg_calmness = sum(s.calmness_score for s in water_in_bucket) / n_water
+
         result_buckets.append(CompanyTimeseriesBucket(
             bucket_start=bucket_data["bucket_start"],
             bucket_end=bucket_data["bucket_end"],
             n_sessions=n,
-            avg_brain_performance_score=sum(s.fta_level for s in bucket_sessions) / n,
-            avg_repetition_burden=sum(s.repetition_burden for s in bucket_sessions) / n,
+            avg_brain_performance_score=avg_bps,
+            avg_repetition_burden=avg_burden,
+            n_water_sessions=n_water,
+            avg_calmness_score=avg_calmness,
         ))
 
     return CompanyTimeseriesResponse(

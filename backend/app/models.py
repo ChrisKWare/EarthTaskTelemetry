@@ -1,5 +1,5 @@
 """SQLAlchemy ORM models."""
-from sqlalchemy import Column, Integer, String, Boolean, Float, Text, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, Float, Text, DateTime, UniqueConstraint
 from datetime import datetime, timezone
 
 from .db import Base
@@ -34,12 +34,13 @@ class SessionSummary(Base):
     player_id = Column(String, index=True, nullable=False)
     session_id = Column(String, unique=True, nullable=False)
     task_version = Column(String, nullable=False)
-    fta_level = Column(Float, nullable=False)
-    fta_strict = Column(Boolean, nullable=False)
-    repetition_burden = Column(Float, nullable=False)
-    earth_score_bucket = Column(Integer, nullable=False)
+    fta_level = Column(Float, nullable=True)
+    fta_strict = Column(Boolean, nullable=True)
+    repetition_burden = Column(Float, nullable=True)
+    earth_score_bucket = Column(Integer, nullable=True)
     created_ts_utc = Column(String, nullable=False)
     company_id = Column(String, index=True, nullable=True)
+    calmness_score = Column(Float, nullable=True)
 
 
 class CompanyRegistry(Base):
@@ -54,11 +55,15 @@ class CompanyRegistry(Base):
 
 
 class ModelState(Base):
-    """Stores trained model state for predicting next-session fta_level."""
+    """Stores trained model state for predicting next-session metrics."""
     __tablename__ = "model_state"
+    __table_args__ = (
+        UniqueConstraint("player_id", "model_name"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    player_id = Column(String, unique=True, index=True, nullable=False)
+    player_id = Column(String, index=True, nullable=False)
+    model_name = Column(String, nullable=False, default="earth", index=True)
     trained_ts_utc = Column(String, nullable=False)
     n_samples = Column(Integer, nullable=False)
     coefficients_json = Column(Text, nullable=True)  # JSON array of coefficients

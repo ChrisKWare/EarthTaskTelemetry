@@ -1,4 +1,4 @@
-"""ML training logic for predicting next-session fta_level."""
+"""ML training logic for predicting next-session metrics."""
 import json
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -18,7 +18,7 @@ def prepare_training_data(
     sessions: List[SessionSummary],
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """
-    Prepare training data from session summaries.
+    Prepare training data from earth session summaries.
 
     Features (X): previous fta_level, previous repetition_burden
     Target (y): next-session fta_level
@@ -41,6 +41,31 @@ def prepare_training_data(
     return np.array(X), np.array(y)
 
 
+def prepare_water_training_data(
+    sessions: List[SessionSummary],
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Prepare training data from water session summaries.
+
+    Features (X): previous calmness_score
+    Target (y): next-session calmness_score
+
+    Returns None if insufficient data (need at least 2 sessions to create 1 sample).
+    """
+    valid = [s for s in sessions if s.calmness_score is not None]
+    if len(valid) < 2:
+        return None
+
+    X = []
+    y = []
+
+    for i in range(len(valid) - 1):
+        X.append([valid[i].calmness_score])
+        y.append(valid[i + 1].calmness_score)
+
+    return np.array(X), np.array(y)
+
+
 def train_model(X: np.ndarray, y: np.ndarray) -> Tuple[LinearRegression, float]:
     """
     Train a LinearRegression model and compute MAE.
@@ -56,26 +81,47 @@ def train_model(X: np.ndarray, y: np.ndarray) -> Tuple[LinearRegression, float]:
     return model, mae
 
 
-def retrain_player_model(player_id: str, db: Session) -> ModelState:
+def retrain_player_model(player_id: str, db: Session, model_name: str = "earth") -> ModelState:
     """
-    Retrain the model for a specific player using all their finalized sessions.
+    Retrain the model for a specific player using their finalized sessions.
+
+    model_name="earth" trains on earth_v1 sessions using fta_level/repetition_burden.
+    model_name="water" trains on water_v1 sessions using calmness_score.
 
     Returns the updated ModelState record.
     """
-    # Get all sessions for this player, ordered by created_ts_utc
-    sessions = (
-        db.query(SessionSummary)
-        .filter(SessionSummary.player_id == player_id)
-        .order_by(SessionSummary.created_ts_utc)
-        .all()
-    )
-
     now_utc = datetime.now(timezone.utc).isoformat()
+
+    # Get sessions filtered by task type
+    if model_name == "water":
+        sessions = (
+            db.query(SessionSummary)
+            .filter(
+                SessionSummary.player_id == player_id,
+                SessionSummary.task_version == "water_v1",
+                SessionSummary.calmness_score.isnot(None),
+            )
+            .order_by(SessionSummary.created_ts_utc)
+            .all()
+        )
+    else:
+        sessions = (
+            db.query(SessionSummary)
+            .filter(
+                SessionSummary.player_id == player_id,
+                SessionSummary.task_version == "earth_v1",
+                SessionSummary.fta_level.isnot(None),
+            )
+            .order_by(SessionSummary.created_ts_utc)
+            .all()
+        )
+
     n_sessions = len(sessions)
 
-    # Check for existing model state
+    # Check for existing model state (filtered by model_name)
     existing_state = db.query(ModelState).filter(
-        ModelState.player_id == player_id
+        ModelState.player_id == player_id,
+        ModelState.model_name == model_name,
     ).first()
 
     # Guardrail: need at least MIN_SESSIONS_FOR_TRAINING finalized sessions
@@ -90,6 +136,7 @@ def retrain_player_model(player_id: str, db: Session) -> ModelState:
         else:
             existing_state = ModelState(
                 player_id=player_id,
+                model_name=model_name,
                 trained_ts_utc=now_utc,
                 n_samples=n_sessions,
                 coefficients_json=None,
@@ -103,8 +150,12 @@ def retrain_player_model(player_id: str, db: Session) -> ModelState:
         db.refresh(existing_state)
         return existing_state
 
-    # Prepare training data
-    result = prepare_training_data(sessions)
+    # Prepare training data based on model type
+    if model_name == "water":
+        result = prepare_water_training_data(sessions)
+    else:
+        result = prepare_training_data(sessions)
+
     if result is None:
         # Should not happen if n_sessions >= 3, but handle gracefully
         if existing_state:
@@ -114,6 +165,7 @@ def retrain_player_model(player_id: str, db: Session) -> ModelState:
         else:
             existing_state = ModelState(
                 player_id=player_id,
+                model_name=model_name,
                 trained_ts_utc=now_utc,
                 n_samples=n_sessions,
                 status="insufficient_data",
@@ -141,6 +193,7 @@ def retrain_player_model(player_id: str, db: Session) -> ModelState:
     else:
         existing_state = ModelState(
             player_id=player_id,
+            model_name=model_name,
             trained_ts_utc=now_utc,
             n_samples=n_sessions,
             coefficients_json=coefficients_json,
