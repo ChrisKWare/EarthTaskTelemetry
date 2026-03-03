@@ -122,7 +122,7 @@ def fetch_company_predictions(player_ids, api_base):
 
     Returns dict with keys:
         earth_pred: float | None  (mean predicted Brain Performance 0-100%)
-        water_pred: float | None  (mean predicted Calmness 0-10)
+        water_pred: float | None  (mean predicted Stress 0-100%)
         earth_n: int  (number of players with valid earth predictions)
         water_n: int  (number of players with valid water predictions)
     """
@@ -161,10 +161,10 @@ def fetch_company_predictions(player_ids, api_base):
                 intercept = ms.get("intercept")
                 if coefficients and len(coefficients) >= 1 and intercept is not None:
                     latest = water_sessions[-1]
-                    calmness = latest.get("calmness_score")
-                    if calmness is not None:
-                        pred = intercept + coefficients[0] * calmness
-                        pred = max(0.0, min(10.0, pred))
+                    stress = latest.get("stress_score")
+                    if stress is not None:
+                        pred = intercept + coefficients[0] * stress
+                        pred = max(0.0, min(100.0, pred))
                         water_preds.append(pred)
 
     return {
@@ -173,6 +173,70 @@ def fetch_company_predictions(player_ids, api_base):
         "earth_n": len(earth_preds),
         "water_n": len(water_preds),
     }
+
+
+def _build_performance_chart(df, has_earth, has_water, predictions, title):
+    """Build a combined Brain Performance + Stress chart from a timeseries DataFrame."""
+    fig = go.Figure()
+
+    df_earth_ts = None
+    df_water_ts = None
+
+    if has_earth:
+        df_earth_ts = df.dropna(subset=["avg_brain_performance_score"])
+        fig.add_trace(go.Scatter(
+            x=df_earth_ts["bucket_start"],
+            y=df_earth_ts["avg_brain_performance_score"] * 100,
+            mode="lines+markers",
+            name="Brain Performance Score",
+            line=dict(color="#7ed957"),
+            marker=dict(color="#7ed957"),
+            hovertemplate="%{x|%Y-%m-%d}<br>Brain Performance: %{y:.1f}%<extra></extra>",
+        ))
+
+    if has_water:
+        df_water_ts = df.dropna(subset=["avg_stress_score"])
+        fig.add_trace(go.Scatter(
+            x=df_water_ts["bucket_start"],
+            y=df_water_ts["avg_stress_score"],
+            mode="lines+markers",
+            name="Stress Score",
+            line=dict(color="#8c52ff"),
+            marker=dict(color="#8c52ff"),
+            hovertemplate="%{x|%Y-%m-%d}<br>Stress: %{y:.1f}%<extra></extra>",
+        ))
+
+    if predictions:
+        if predictions["earth_pred"] is not None and df_earth_ts is not None and len(df_earth_ts):
+            last_x = df_earth_ts["bucket_start"].iloc[-1]
+            fig.add_trace(go.Scatter(
+                x=[last_x],
+                y=[predictions["earth_pred"]],
+                mode="markers",
+                marker=dict(symbol="diamond", size=12, color="#ff6347"),
+                name=f"Predicted Brain ({predictions['earth_pred']:.1f}%)",
+                showlegend=True,
+            ))
+        if predictions["water_pred"] is not None and df_water_ts is not None and len(df_water_ts):
+            last_x = df_water_ts["bucket_start"].iloc[-1]
+            fig.add_trace(go.Scatter(
+                x=[last_x],
+                y=[predictions["water_pred"]],
+                mode="markers",
+                marker=dict(symbol="diamond", size=12, color="#ff6347"),
+                name=f"Predicted Stress ({predictions['water_pred']:.1f}%)",
+                showlegend=True,
+            ))
+
+    fig.update_yaxes(range=[0, 110], ticksuffix="%")
+    fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        yaxis_title="Score (%)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        hovermode="x unified",
+    )
+    return fig
 
 
 # Privacy gate placeholder text
@@ -267,10 +331,10 @@ else:
             with kpi_cols[2]:
                 st.metric("Avg Brain Performance Score", "\u2014")
             with kpi_cols[3]:
-                st.metric("Avg Calmness Score", "\u2014")
+                st.metric("Avg Stress Score", "\u2014")
         else:
             has_earth = summary.get("avg_brain_performance_score") is not None
-            has_water = summary.get("avg_calmness_score") is not None
+            has_water = summary.get("avg_stress_score") is not None
 
             with kpi_cols[0]:
                 st.metric("Total Players", summary["n_players"])
@@ -284,10 +348,10 @@ else:
                     st.metric("Avg Brain Performance Score", "\u2014")
             with kpi_cols[3]:
                 if has_water:
-                    avg_calm = summary["avg_calmness_score"]
-                    st.metric("Avg Calmness Score", f"{avg_calm:.2f}")
+                    avg_stress = summary["avg_stress_score"]
+                    st.metric("Avg Stress Score", f"{avg_stress:.1f}%")
                 else:
-                    st.metric("Avg Calmness Score", "\u2014")
+                    st.metric("Avg Stress Score", "\u2014")
 
             # Advanced metrics expander (repetition burden)
             if has_earth:
@@ -298,121 +362,120 @@ else:
         st.divider()
 
         # --- Timeseries ---
-        # Bucket selector (always visible)
-        bucket_type = st.radio(
-            "Time Bucket",
-            options=["day", "week"],
-            horizontal=True,
-            index=0,
-        )
-
-        if not privacy_gated and timeseries is None:
-            timeseries = get_company_timeseries(token, bucket_type)
-            if "error" in timeseries:
-                if timeseries.get("status_code") == 403:
+        # Fetch both day (weekly view) and week (monthly view) buckets
+        ts_day = None
+        ts_week = None
+        if not privacy_gated:
+            ts_day = get_company_timeseries(token, "day")
+            if "error" in ts_day:
+                if ts_day.get("status_code") == 403:
                     privacy_gated = True
-                    timeseries = None
+                    ts_day = None
                 else:
-                    st.error(f"Error loading timeseries: {timeseries['error']}")
-                    timeseries = None
+                    st.error(f"Error loading daily timeseries: {ts_day['error']}")
+                    ts_day = None
 
-        # Prepare timeseries DataFrame
-        df = None
-        has_earth_ts = False
-        has_water_ts = False
-        if timeseries and timeseries.get("buckets"):
-            df = pd.DataFrame(timeseries["buckets"])
-            df["bucket_start"] = pd.to_datetime(df["bucket_start"])
-            has_earth_ts = df["avg_brain_performance_score"].notna().any()
-            has_water_ts = df["avg_calmness_score"].notna().any()
+        if not privacy_gated:
+            ts_week = get_company_timeseries(token, "week")
+            if "error" in ts_week:
+                if ts_week.get("status_code") == 403:
+                    privacy_gated = True
+                    ts_week = None
+                else:
+                    st.error(f"Error loading weekly timeseries: {ts_week['error']}")
+                    ts_week = None
+
+        # Build DataFrames for each bucket type
+        df_day = None
+        df_week = None
+        has_earth_day = False
+        has_water_day = False
+        has_earth_week = False
+        has_water_week = False
+
+        if ts_day and ts_day.get("buckets"):
+            df_day = pd.DataFrame(ts_day["buckets"])
+            df_day["bucket_start"] = pd.to_datetime(df_day["bucket_start"])
+            has_earth_day = df_day["avg_brain_performance_score"].notna().any()
+            has_water_day = df_day["avg_stress_score"].notna().any()
+
+        if ts_week and ts_week.get("buckets"):
+            df_week = pd.DataFrame(ts_week["buckets"])
+            df_week["bucket_start"] = pd.to_datetime(df_week["bucket_start"])
+            has_earth_week = df_week["avg_brain_performance_score"].notna().any()
+            has_water_week = df_week["avg_stress_score"].notna().any()
+
+        # Use df_day as the default df for downstream sections (data table, etc.)
+        df = df_day
+        has_earth_ts = has_earth_day
+        has_water_ts = has_water_day
 
         # --- Predictions ---
         predictions = None
         if not privacy_gated and player_ids:
             predictions = fetch_company_predictions(player_ids, API_BASE_URL)
 
-        # --- Brain Performance Section ---
-        st.subheader("Brain Performance Score Over Time")
+        # --- Weekly / Monthly Side-by-Side Charts ---
         if privacy_gated:
+            st.subheader("Performance Over Time")
             st.info(PRIVACY_MSG)
-        elif df is not None and has_earth_ts:
-            df_earth_ts = df.dropna(subset=["avg_brain_performance_score"])
-            fig_bps = px.line(
-                df_earth_ts,
-                x="bucket_start",
-                y="avg_brain_performance_score",
-                markers=True,
-                title="Average Brain Performance Score",
-                color_discrete_sequence=["#7ed957"],
-            )
-            fig_bps.update_yaxes(range=[0, 1.1], tickformat=".0%")
-            fig_bps.update_layout(
-                xaxis_title="Date",
-                yaxis_title="Brain Performance Score"
-            )
-            # Add prediction line if available (earth_pred is 0-100, chart y is 0-1)
-            if predictions and predictions["earth_pred"] is not None:
-                pred_frac = predictions["earth_pred"] / 100.0
-                last_x = df_earth_ts["bucket_start"].iloc[-1]
-                fig_bps.add_trace(go.Scatter(
-                    x=[last_x],
-                    y=[pred_frac],
-                    mode="markers",
-                    marker=dict(symbol="diamond", size=12, color="#ff6347"),
-                    name=f"Predicted ({predictions['earth_pred']:.1f}%)",
-                    showlegend=True,
-                ))
-                fig_bps.add_hline(
-                    y=pred_frac,
-                    line_dash="dash",
-                    line_color="#ff6347",
-                    opacity=0.5,
-                )
-            st.plotly_chart(fig_bps, use_container_width=True)
-        else:
-            st.info("No Brain Performance data yet.")
+        elif (df_day is not None and (has_earth_day or has_water_day)) or \
+             (df_week is not None and (has_earth_week or has_water_week)):
 
-        st.divider()
+            # CSS gradient vertical separator
+            st.markdown(
+                """
+                <style>
+                .gradient-separator {
+                    width: 4px;
+                    min-height: 100%;
+                    height: 100%;
+                    background: linear-gradient(180deg, #0097b2, #7ed957);
+                    border-radius: 2px;
+                    margin: 0 auto;
+                }
+                /* Stretch the separator column to full height */
+                div[data-testid="stHorizontalBlock"] > div:nth-child(2) {
+                    display: flex;
+                    align-items: stretch;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        # --- Calmness Section ---
-        st.subheader("Calmness Score Over Time")
-        if privacy_gated:
-            st.info(PRIVACY_MSG)
-        elif df is not None and has_water_ts:
-            df_water_ts = df.dropna(subset=["avg_calmness_score"])
-            fig_calm = px.line(
-                df_water_ts,
-                x="bucket_start",
-                y="avg_calmness_score",
-                markers=True,
-                title="Average Calmness Score Over Time",
-                color_discrete_sequence=["#1f77b4"],
-            )
-            fig_calm.update_yaxes(range=[0, 10.5])
-            fig_calm.update_layout(
-                xaxis_title="Date",
-                yaxis_title="Calmness Score"
-            )
-            # Add prediction line if available
-            if predictions and predictions["water_pred"] is not None:
-                last_x = df_water_ts["bucket_start"].iloc[-1]
-                fig_calm.add_trace(go.Scatter(
-                    x=[last_x],
-                    y=[predictions["water_pred"]],
-                    mode="markers",
-                    marker=dict(symbol="diamond", size=12, color="#ff6347"),
-                    name=f"Predicted ({predictions['water_pred']:.2f})",
-                    showlegend=True,
-                ))
-                fig_calm.add_hline(
-                    y=predictions["water_pred"],
-                    line_dash="dash",
-                    line_color="#ff6347",
-                    opacity=0.5,
+            col_weekly, col_sep, col_monthly = st.columns([10, 1, 10])
+
+            with col_weekly:
+                st.subheader("Weekly Progress")
+                if df_day is not None and (has_earth_day or has_water_day):
+                    fig_weekly = _build_performance_chart(
+                        df_day, has_earth_day, has_water_day,
+                        predictions, "Brain Performance & Stress (Daily)",
+                    )
+                    st.plotly_chart(fig_weekly, use_container_width=True)
+                else:
+                    st.info("No daily data yet.")
+
+            with col_sep:
+                st.markdown(
+                    '<div class="gradient-separator"></div>',
+                    unsafe_allow_html=True,
                 )
-            st.plotly_chart(fig_calm, use_container_width=True)
+
+            with col_monthly:
+                st.subheader("Monthly Progress")
+                if df_week is not None and (has_earth_week or has_water_week):
+                    fig_monthly = _build_performance_chart(
+                        df_week, has_earth_week, has_water_week,
+                        predictions, "Brain Performance & Stress (Weekly)",
+                    )
+                    st.plotly_chart(fig_monthly, use_container_width=True)
+                else:
+                    st.info("No weekly data yet.")
         else:
-            st.info("No Calmness data yet.")
+            st.subheader("Performance Over Time")
+            st.info("No performance data yet.")
 
         st.divider()
 
@@ -425,14 +488,14 @@ else:
                 st.metric("Predicted Next Brain Performance", "\u2014")
                 st.caption(PRIVACY_MSG)
             with pred_cols[1]:
-                st.metric("Predicted Next Calmness (0\u201310)", "\u2014")
+                st.metric("Predicted Next Stress Score", "\u2014")
                 st.caption(PRIVACY_MSG)
         elif predictions is None:
             with pred_cols[0]:
                 st.metric("Predicted Next Brain Performance", "N/A")
                 st.caption("No trained models yet")
             with pred_cols[1]:
-                st.metric("Predicted Next Calmness (0\u201310)", "N/A")
+                st.metric("Predicted Next Stress Score", "N/A")
                 st.caption("No trained models yet")
         else:
             with pred_cols[0]:
@@ -448,12 +511,12 @@ else:
             with pred_cols[1]:
                 if predictions["water_pred"] is not None:
                     st.metric(
-                        "Predicted Next Calmness (0\u201310)",
-                        f"{predictions['water_pred']:.2f}",
+                        "Predicted Next Stress Score",
+                        f"{predictions['water_pred']:.1f}%",
                     )
                     st.caption(f"Based on {predictions['water_n']} player model(s)")
                 else:
-                    st.metric("Predicted Next Calmness (0\u201310)", "N/A")
+                    st.metric("Predicted Next Stress Score", "N/A")
                     st.caption("No trained water models yet")
 
         st.divider()
@@ -502,8 +565,8 @@ else:
                 table_cols += ["avg_brain_performance_score", "avg_repetition_burden"]
                 col_names += ["Brain Performance Score", "Repetition Burden"]
             if has_water_ts:
-                table_cols += ["avg_calmness_score"]
-                col_names += ["Calmness Score"]
+                table_cols += ["avg_stress_score"]
+                col_names += ["Stress Score"]
 
             display_df = df[table_cols].copy()
             display_df.columns = col_names
@@ -515,9 +578,9 @@ else:
                 display_df["Repetition Burden"] = display_df["Repetition Burden"].apply(
                     lambda x: f"{x:.2f}" if x is not None and pd.notna(x) else "-"
                 )
-            if "Calmness Score" in display_df.columns:
-                display_df["Calmness Score"] = display_df["Calmness Score"].apply(
-                    lambda x: f"{x:.2f}" if x is not None and pd.notna(x) else "-"
+            if "Stress Score" in display_df.columns:
+                display_df["Stress Score"] = display_df["Stress Score"].apply(
+                    lambda x: f"{x:.1f}%" if x is not None and pd.notna(x) else "-"
                 )
             st.dataframe(display_df, use_container_width=True, hide_index=True)
 

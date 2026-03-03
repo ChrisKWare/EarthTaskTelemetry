@@ -47,12 +47,12 @@ def prepare_water_training_data(
     """
     Prepare training data from water session summaries.
 
-    Features (X): previous calmness_score
-    Target (y): next-session calmness_score
+    Features (X): previous stress_score
+    Target (y): next-session stress_score
 
     Returns None if insufficient data (need at least 2 sessions to create 1 sample).
     """
-    valid = [s for s in sessions if s.calmness_score is not None]
+    valid = [s for s in sessions if s.stress_score is not None]
     if len(valid) < 2:
         return None
 
@@ -60,8 +60,8 @@ def prepare_water_training_data(
     y = []
 
     for i in range(len(valid) - 1):
-        X.append([valid[i].calmness_score])
-        y.append(valid[i + 1].calmness_score)
+        X.append([valid[i].stress_score])
+        y.append(valid[i + 1].stress_score)
 
     return np.array(X), np.array(y)
 
@@ -86,7 +86,7 @@ def retrain_player_model(player_id: str, db: Session, model_name: str = "earth")
     Retrain the model for a specific player using their finalized sessions.
 
     model_name="earth" trains on earth_v1 sessions using fta_level/repetition_burden.
-    model_name="water" trains on water_v1 sessions using calmness_score.
+    model_name="water" trains on water_v1 sessions using stress_score.
 
     Returns the updated ModelState record.
     """
@@ -99,7 +99,7 @@ def retrain_player_model(player_id: str, db: Session, model_name: str = "earth")
             .filter(
                 SessionSummary.player_id == player_id,
                 SessionSummary.task_version == "water_v1",
-                SessionSummary.calmness_score.isnot(None),
+                SessionSummary.stress_score.isnot(None),
             )
             .order_by(SessionSummary.created_ts_utc)
             .all()

@@ -146,11 +146,11 @@ def finalize_session(
     )
 
     if effective_task_version == "water_v1":
-        # Water path: require calmness_score
-        if not body or body.calmness_score is None:
+        # Water path: require stress_score
+        if not body or body.stress_score is None:
             raise HTTPException(
                 status_code=400,
-                detail="water_v1 sessions require calmness_score in request body",
+                detail="water_v1 sessions require stress_score in request body",
             )
 
         summary = SessionSummary(
@@ -163,7 +163,7 @@ def finalize_session(
             earth_score_bucket=None,
             created_ts_utc=datetime.now(timezone.utc).isoformat(),
             company_id=company_id,
-            calmness_score=body.calmness_score,
+            stress_score=body.stress_score,
         )
         db.add(summary)
         db.commit()
@@ -184,7 +184,7 @@ def finalize_session(
             earth_score_bucket=metrics["earth_score_bucket"],
             created_ts_utc=datetime.now(timezone.utc).isoformat(),
             company_id=company_id,
-            calmness_score=None,
+            stress_score=None,
         )
         db.add(summary)
         db.commit()
@@ -300,7 +300,7 @@ def get_company_summary(t: str, db: Session = Depends(get_db)):
 
     # Split by task type
     earth_sessions = [s for s in sessions if s.fta_level is not None]
-    water_sessions = [s for s in sessions if s.calmness_score is not None]
+    water_sessions = [s for s in sessions if s.stress_score is not None]
 
     # Compute earth aggregates
     avg_brain_performance_score = None
@@ -313,10 +313,10 @@ def get_company_summary(t: str, db: Session = Depends(get_db)):
         avg_earth_score_bucket = sum(s.earth_score_bucket for s in earth_sessions) / n_earth
 
     # Compute water aggregates
-    avg_calmness_score = None
+    avg_stress_score = None
     n_water = len(water_sessions)
     if water_sessions:
-        avg_calmness_score = sum(s.calmness_score for s in water_sessions) / n_water
+        avg_stress_score = sum(s.stress_score for s in water_sessions) / n_water
 
     return CompanySummaryResponse(
         company_id=company_id,
@@ -326,7 +326,7 @@ def get_company_summary(t: str, db: Session = Depends(get_db)):
         avg_repetition_burden=avg_repetition_burden,
         avg_earth_score_bucket=avg_earth_score_bucket,
         n_water_sessions=n_water,
-        avg_calmness_score=avg_calmness_score,
+        avg_stress_score=avg_stress_score,
     )
 
 
@@ -400,7 +400,7 @@ def get_company_timeseries(t: str, bucket: str = "day", db: Session = Depends(ge
         n = len(bucket_sessions)
 
         earth_in_bucket = [s for s in bucket_sessions if s.fta_level is not None]
-        water_in_bucket = [s for s in bucket_sessions if s.calmness_score is not None]
+        water_in_bucket = [s for s in bucket_sessions if s.stress_score is not None]
 
         avg_bps = None
         avg_burden = None
@@ -409,10 +409,10 @@ def get_company_timeseries(t: str, bucket: str = "day", db: Session = Depends(ge
             avg_bps = sum(s.fta_level for s in earth_in_bucket) / n_earth
             avg_burden = sum(s.repetition_burden for s in earth_in_bucket) / n_earth
 
-        avg_calmness = None
+        avg_stress = None
         n_water = len(water_in_bucket)
         if water_in_bucket:
-            avg_calmness = sum(s.calmness_score for s in water_in_bucket) / n_water
+            avg_stress = sum(s.stress_score for s in water_in_bucket) / n_water
 
         result_buckets.append(CompanyTimeseriesBucket(
             bucket_start=bucket_data["bucket_start"],
@@ -421,7 +421,7 @@ def get_company_timeseries(t: str, bucket: str = "day", db: Session = Depends(ge
             avg_brain_performance_score=avg_bps,
             avg_repetition_burden=avg_burden,
             n_water_sessions=n_water,
-            avg_calmness_score=avg_calmness,
+            avg_stress_score=avg_stress,
         ))
 
     return CompanyTimeseriesResponse(

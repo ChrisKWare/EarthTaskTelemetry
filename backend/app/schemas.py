@@ -25,7 +25,7 @@ class AttemptSubmitted(BaseModel):
 class FinalizeSessionRequest(BaseModel):
     """Optional request body for session finalization."""
     task_version: Optional[str] = None
-    calmness_score: Optional[float] = None
+    stress_score: Optional[float] = None
 
 
 class StoredResponse(BaseModel):
@@ -51,7 +51,7 @@ class SessionSummaryResponse(BaseModel):
     repetition_burden: Optional[float] = None
     earth_score_bucket: Optional[int] = None
     created_ts_utc: str
-    calmness_score: Optional[float] = None
+    stress_score: Optional[float] = None
 
 
 class ModelStateResponse(BaseModel):
@@ -86,7 +86,7 @@ class CompanySummaryResponse(BaseModel):
     avg_repetition_burden: Optional[float] = None
     avg_earth_score_bucket: Optional[float] = None
     n_water_sessions: int = 0
-    avg_calmness_score: Optional[float] = None
+    avg_stress_score: Optional[float] = None
 
 
 class CompanyTimeseriesBucket(BaseModel):
@@ -97,7 +97,7 @@ class CompanyTimeseriesBucket(BaseModel):
     avg_brain_performance_score: Optional[float] = None
     avg_repetition_burden: Optional[float] = None
     n_water_sessions: int = 0
-    avg_calmness_score: Optional[float] = None
+    avg_stress_score: Optional[float] = None
 
 
 class CompanyTimeseriesResponse(BaseModel):

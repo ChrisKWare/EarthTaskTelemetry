@@ -27,7 +27,7 @@ REQUIRED_SCHEMA = {
     "session_summary": [
         "player_id", "session_id", "task_version", "fta_level", "fta_strict",
         "repetition_burden", "earth_score_bucket", "created_ts_utc",
-        "company_id", "calmness_score",
+        "company_id", "stress_score",
     ],
     "company_registry": [
         "company_id", "company_name", "dashboard_token", "created_ts_utc",
@@ -133,8 +133,10 @@ def ensure_schema():
     for table, cols in sorted(missing.items()):
         lines.append(f"  {table}: {', '.join(cols)}")
     lines.append("")
-    lines.append("To fix, run the idempotent migration:")
+    lines.append("To fix, run the idempotent migrations:")
     lines.append("  python -m backend.migrations.002_water_schema")
+    lines.append("  python -m backend.migrations.003_rename_calmness_to_stress")
+    lines.append("  python -m backend.migrations.004_stress_score_scale_0_100")
     lines.append("")
     lines.append("Or set ALLOW_DEV_DB_RESET=1 to auto-backup and recreate the DB.")
     raise RuntimeError("\n".join(lines))

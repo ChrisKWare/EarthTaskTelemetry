@@ -10,13 +10,14 @@ import pytest
 
 from backend.app.db import check_schema, ensure_schema, Base, REQUIRED_SCHEMA
 
-# Migration module has a leading digit — must use importlib.
+# Migration modules have leading digits — must use importlib.
 _migration_002 = importlib.import_module("backend.migrations.002_water_schema")
+_migration_003 = importlib.import_module("backend.migrations.003_rename_calmness_to_stress")
 
 
 def _create_old_schema_db(path: Path):
     """Create a SQLite DB with the pre-water schema (missing model_name,
-    calmness_score, etc.)."""
+    stress_score, etc.)."""
     conn = sqlite3.connect(str(path))
     cursor = conn.cursor()
 
@@ -34,7 +35,7 @@ def _create_old_schema_db(path: Path):
         )
     """)
 
-    # Old session_summary: no calmness_score, no company_id
+    # Old session_summary: no stress_score, no company_id
     cursor.execute("""
         CREATE TABLE session_summary (
             id INTEGER PRIMARY KEY,
@@ -74,9 +75,9 @@ class TestCheckSchema:
         assert "model_state" in missing
         assert "model_name" in missing["model_state"]
 
-        # session_summary should report calmness_score and company_id missing
+        # session_summary should report stress_score and company_id missing
         assert "session_summary" in missing
-        assert "calmness_score" in missing["session_summary"]
+        assert "stress_score" in missing["session_summary"]
         assert "company_id" in missing["session_summary"]
 
         # company_registry table doesn't exist at all
@@ -155,9 +156,10 @@ class TestEnsureSchema:
         msg = str(exc_info.value)
         # Should mention the missing column
         assert "model_name" in msg
-        assert "calmness_score" in msg
-        # Should mention the migration command
+        assert "stress_score" in msg
+        # Should mention the migration commands
         assert "002_water_schema" in msg
+        assert "003_rename_calmness_to_stress" in msg
 
     def test_fresh_db_creates_cleanly(self, tmp_path):
         """If the DB file doesn't exist, ensure_schema creates it."""
@@ -187,27 +189,30 @@ class TestEnsureSchema:
 
 
 class TestMigrationScript:
-    """Tests for the 002_water_schema migration script."""
+    """Tests for the 002 + 003 migration scripts."""
 
     def test_migration_adds_missing_columns(self, tmp_path):
         db_path = tmp_path / "telemetry.db"
         _create_old_schema_db(db_path)
 
         _migration_002.migrate(db_path)
+        _migration_003.migrate(db_path)
 
         # Verify columns now exist
         missing = check_schema(db_path)
         # model_state and session_summary should now have all required cols
         assert "model_state" not in missing or "model_name" not in missing.get("model_state", [])
-        assert "session_summary" not in missing or "calmness_score" not in missing.get("session_summary", [])
+        assert "session_summary" not in missing or "stress_score" not in missing.get("session_summary", [])
 
     def test_migration_is_idempotent(self, tmp_path):
         db_path = tmp_path / "telemetry.db"
         _create_old_schema_db(db_path)
 
         _migration_002.migrate(db_path)
+        _migration_003.migrate(db_path)
         # Running again should not raise
         _migration_002.migrate(db_path)
+        _migration_003.migrate(db_path)
 
         missing = check_schema(db_path)
         assert "model_state" not in missing or "model_name" not in missing.get("model_state", [])
@@ -217,6 +222,7 @@ class TestMigrationScript:
         _create_old_schema_db(db_path)
 
         _migration_002.migrate(db_path)
+        _migration_003.migrate(db_path)
 
         # Old row should still be there with model_name defaulted to 'earth'
         conn = sqlite3.connect(str(db_path))

@@ -1,4 +1,5 @@
 """Application settings."""
+import logging
 import os
 from pathlib import Path
 
@@ -15,3 +16,10 @@ MIN_COMPANY_N = int(os.getenv("MIN_COMPANY_N", "5"))
 
 # Admin API key for privileged endpoints (must be set in production)
 ADMIN_KEY = os.getenv("ADMIN_KEY", "")
+
+logger = logging.getLogger(__name__)
+logger.info(
+    "ADMIN_KEY loaded: set=%s len=%s",
+    bool(ADMIN_KEY),
+    len(ADMIN_KEY) if ADMIN_KEY else 0,
+)

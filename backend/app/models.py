@@ -40,7 +40,7 @@ class SessionSummary(Base):
     earth_score_bucket = Column(Integer, nullable=True)
     created_ts_utc = Column(String, nullable=False)
     company_id = Column(String, index=True, nullable=True)
-    calmness_score = Column(Float, nullable=True)
+    stress_score = Column(Float, nullable=True)
 
 
 class CompanyRegistry(Base):

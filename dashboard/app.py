@@ -282,25 +282,62 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
 
     st.divider()
 
-    # Earth Charts (only if earth sessions exist)
-    if len(df_earth) > 0:
+    # Combined Performance Chart (Brain Performance + Stress on one 0-100% axis)
+    has_earth = len(df_earth) > 0
+    has_water = len(df_water) > 0
+
+    if has_earth or has_water:
+        st.subheader("Performance Over Sessions")
+        fig_combined = go.Figure()
+
+        if has_earth:
+            # Brain Performance is 0-1 fractional; convert to 0-100%
+            fig_combined.add_trace(go.Scatter(
+                x=df_earth["created_ts_utc"],
+                y=df_earth["fta_level"] * 100,
+                mode="lines+markers",
+                name="Brain Performance Score",
+                line=dict(color="#7ed957"),
+                marker=dict(color="#7ed957"),
+                hovertemplate="Date: %{x|%Y-%m-%d}<br>Brain Performance: %{y:.1f}%<extra></extra>",
+            ))
+
+        if has_water:
+            fig_combined.add_trace(go.Scatter(
+                x=df_water["created_ts_utc"],
+                y=df_water["stress_score"],
+                mode="lines+markers",
+                name="Stress Score",
+                line=dict(color="#8c52ff"),
+                marker=dict(color="#8c52ff"),
+                hovertemplate="Date: %{x|%Y-%m-%d}<br>Stress: %{y:.1f}%<extra></extra>",
+            ))
+
+        fig_combined.update_yaxes(range=[0, 110], ticksuffix="%")
+        fig_combined.update_layout(
+            title="Brain Performance & Stress Score Trend",
+            xaxis_title="Session Time",
+            yaxis_title="Score (%)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig_combined, use_container_width=True)
+
+    # Water KPI metrics (if water sessions exist)
+    if has_water:
+        col_w1, col_w2 = st.columns(2)
+        with col_w1:
+            latest_stress = df_water.iloc[-1].get("stress_score")
+            st.metric("Latest Stress Score", f"{latest_stress:.1f}%" if latest_stress is not None else "-")
+        with col_w2:
+            avg_stress = df_water["stress_score"].mean()
+            st.metric("Avg Stress Score", f"{avg_stress:.1f}%" if avg_stress is not None else "-")
+
+    # Earth-specific charts (Repetition Burden + Earth Score Distribution)
+    if has_earth:
         col_left, col_right = st.columns(2)
 
         with col_left:
-            st.subheader("Brain Performance Score Over Sessions")
-            fig_fta = px.line(
-                df_earth,
-                x="created_ts_utc",
-                y="fta_level",
-                markers=True,
-                title="Brain Performance Score Trend",
-                color_discrete_sequence=["#7ed957"],
-            )
-            fig_fta.update_yaxes(range=[0, 1.1], tickformat=".0%")
-            fig_fta.update_layout(xaxis_title="Session Time", yaxis_title="Brain Performance Score")
-            st.plotly_chart(fig_fta, use_container_width=True)
-
-        with col_right:
             st.subheader("Repetition Burden Over Sessions")
             fig_burden = px.line(
                 df_earth,
@@ -314,50 +351,23 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
             fig_burden.update_layout(xaxis_title="Session Time", yaxis_title="Avg Attempts Used")
             st.plotly_chart(fig_burden, use_container_width=True)
 
-        # Earth Score Distribution
-        st.subheader("Earth Score Distribution")
-        score_counts = df_earth["earth_score_bucket"].value_counts().sort_index()
-        fig_score = px.bar(
-            x=score_counts.index,
-            y=score_counts.values,
-            labels={"x": "Earth Score Bucket", "y": "Count"},
-            title="Session Outcomes",
-            color=score_counts.index,
-            color_continuous_scale=["#d62728", "#ffbb78", "#2ca02c"],
-        )
-        fig_score.update_layout(showlegend=False)
-        st.plotly_chart(fig_score, use_container_width=True)
-
-    # Water Section (only if water sessions exist)
-    if len(df_water) > 0:
-        st.divider()
-        st.subheader("Water Task: Calmness")
-
-        col_w1, col_w2 = st.columns(2)
-        with col_w1:
-            latest_calmness = df_water.iloc[-1].get("calmness_score")
-            st.metric("Latest Calmness Score", f"{latest_calmness:.2f}" if latest_calmness is not None else "-")
-        with col_w2:
-            avg_calmness = df_water["calmness_score"].mean()
-            st.metric("Avg Calmness Score", f"{avg_calmness:.2f}" if avg_calmness is not None else "-")
-
-        # Calmness trend chart
-        st.subheader("Calmness Score Over Sessions")
-        fig_calm = px.line(
-            df_water,
-            x="created_ts_utc",
-            y="calmness_score",
-            markers=True,
-            title="Calmness Score Trend",
-            color_discrete_sequence=["#1f77b4"],
-        )
-        fig_calm.update_yaxes(range=[0, 1.1])
-        fig_calm.update_layout(xaxis_title="Session Time", yaxis_title="Calmness Score")
-        st.plotly_chart(fig_calm, use_container_width=True)
+        with col_right:
+            st.subheader("Earth Score Distribution")
+            score_counts = df_earth["earth_score_bucket"].value_counts().sort_index()
+            fig_score = px.bar(
+                x=score_counts.index,
+                y=score_counts.values,
+                labels={"x": "Earth Score Bucket", "y": "Count"},
+                title="Session Outcomes",
+                color=score_counts.index,
+                color_continuous_scale=["#d62728", "#ffbb78", "#2ca02c"],
+            )
+            fig_score.update_layout(showlegend=False)
+            st.plotly_chart(fig_score, use_container_width=True)
 
     # Raw data table
     st.subheader("Session Details")
-    detail_cols = ["session_id", "task_version", "fta_level", "fta_strict", "repetition_burden", "earth_score_bucket", "calmness_score", "created_ts_utc"]
+    detail_cols = ["session_id", "task_version", "fta_level", "fta_strict", "repetition_burden", "earth_score_bucket", "stress_score", "created_ts_utc"]
     available_cols = [c for c in detail_cols if c in df.columns]
     st.dataframe(
         df[available_cols],
@@ -505,7 +515,7 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
                 w_intercept = water_model_state.get("intercept")
 
                 if w_coefficients and isinstance(w_coefficients, list) and len(w_coefficients) > 0:
-                    st.markdown(f"**weight_prev_calmness:** `{w_coefficients[0]:.6f}`")
+                    st.markdown(f"**weight_prev_stress:** `{w_coefficients[0]:.6f}`")
                 st.markdown(f"**intercept:** `{w_intercept:.6f}`" if w_intercept is not None else "**intercept:** `-`")
 
         # Water Next-Session Prediction
@@ -532,21 +542,21 @@ if "sessions" in st.session_state and st.session_state["sessions"]:
             elif w_intercept is None:
                 w_prediction_reason = "Water model intercept not available."
             else:
-                last_calmness = water_sessions[-1].get("calmness_score")
-                if last_calmness is None:
-                    w_prediction_reason = "Latest water session missing calmness_score."
+                last_stress = water_sessions[-1].get("stress_score")
+                if last_stress is None:
+                    w_prediction_reason = "Latest water session missing stress_score."
                 else:
                     w_can_predict = True
 
         if w_can_predict:
-            w_y_hat = w_intercept + w_coefficients[0] * last_calmness
-            w_y_hat = max(0.0, min(1.0, w_y_hat))
+            w_y_hat = w_intercept + w_coefficients[0] * last_stress
+            w_y_hat = max(0.0, min(100.0, w_y_hat))
 
             col_wp1, col_wp2 = st.columns(2)
             with col_wp1:
-                st.metric("Predicted Next Calmness Score", f"{w_y_hat:.2f}")
+                st.metric("Predicted Next Stress Score", f"{w_y_hat:.1f}%")
             with col_wp2:
-                st.metric("Last Calmness Score", f"{last_calmness:.2f}")
+                st.metric("Last Stress Score", f"{last_stress:.1f}%")
         else:
             st.info(w_prediction_reason)
 

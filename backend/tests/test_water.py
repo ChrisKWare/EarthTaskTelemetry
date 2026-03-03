@@ -66,7 +66,7 @@ def create_event(
     }
 
 
-def ingest_water_session(client, player_id, session_id, calmness_score, ts_utc="2024-01-15T10:00:00Z"):
+def ingest_water_session(client, player_id, session_id, stress_score, ts_utc="2024-01-15T10:00:00Z"):
     """Helper: ingest events for a water session and finalize it."""
     # Water sessions still need raw events in the DB (the events table stores them).
     for seq in [1, 2, 3]:
@@ -85,13 +85,13 @@ def ingest_water_session(client, player_id, session_id, calmness_score, ts_utc="
     # Finalize with water body
     resp = client.post(
         f"/sessions/{session_id}/finalize",
-        json={"task_version": "water_v1", "calmness_score": calmness_score},
+        json={"task_version": "water_v1", "stress_score": stress_score},
     )
     return resp
 
 
-def test_finalize_water_requires_calmness_score(client):
-    """POST finalize for water session without calmness_score -> 400."""
+def test_finalize_water_requires_stress_score(client):
+    """POST finalize for water session without stress_score -> 400."""
     player_id = "player-water-no-calm"
     session_id = "session-water-no-calm"
 
@@ -106,26 +106,26 @@ def test_finalize_water_requires_calmness_score(client):
         )
         client.post("/events", json=event)
 
-    # Finalize without calmness_score
+    # Finalize without stress_score
     resp = client.post(
         f"/sessions/{session_id}/finalize",
         json={"task_version": "water_v1"},
     )
     assert resp.status_code == 400
-    assert "calmness_score" in resp.json()["detail"]
+    assert "stress_score" in resp.json()["detail"]
 
 
 def test_finalize_water_success(client):
-    """POST events + finalize with water_v1 and calmness_score -> 200."""
+    """POST events + finalize with water_v1 and stress_score -> 200."""
     player_id = "player-water-ok"
     session_id = "session-water-ok"
 
-    resp = ingest_water_session(client, player_id, session_id, calmness_score=0.75)
+    resp = ingest_water_session(client, player_id, session_id, stress_score=75)
     assert resp.status_code == 200
 
     data = resp.json()
     assert data["task_version"] == "water_v1"
-    assert data["calmness_score"] == 0.75
+    assert data["stress_score"] == 75
     assert data["fta_level"] is None
     assert data["fta_strict"] is None
     assert data["repetition_burden"] is None
@@ -149,7 +149,7 @@ def test_finalize_rejects_mixed_player_ids(client):
 
 
 def test_earth_finalize_unchanged(client):
-    """Existing earth finalization still works, calmness_score is None."""
+    """Existing earth finalization still works, stress_score is None."""
     player_id = "player-earth-check"
     session_id = "session-earth-check"
 
@@ -164,7 +164,7 @@ def test_earth_finalize_unchanged(client):
     assert data["task_version"] == "earth_v1"
     assert data["fta_level"] == 1.0
     assert data["fta_strict"] is True
-    assert data["calmness_score"] is None
+    assert data["stress_score"] is None
 
 
 def test_model_state_two_models_per_player(client):
@@ -178,7 +178,7 @@ def test_model_state_two_models_per_player(client):
     client.post("/sessions/earth-sess-1/finalize")
 
     # Create 1 water session (creates water model state with insufficient_data)
-    ingest_water_session(client, player_id, "water-sess-1", 0.5, ts_utc="2024-01-15T11:00:00Z")
+    ingest_water_session(client, player_id, "water-sess-1", 50, ts_utc="2024-01-15T11:00:00Z")
 
     # Both model states should exist
     earth_resp = client.get(f"/model/state/{player_id}?model_name=earth")
@@ -199,7 +199,7 @@ def test_water_model_trains_on_water_sessions_only(client):
     for i in range(3):
         ingest_water_session(
             client, player_id, f"water-sess-{i+1}",
-            calmness_score=0.5 + i * 0.1,
+            stress_score=50 + i * 10,
             ts_utc=f"2024-01-{15+i}T10:00:00Z",
         )
 
@@ -210,7 +210,7 @@ def test_water_model_trains_on_water_sessions_only(client):
     assert water_data["status"] == "trained"
     assert water_data["n_samples"] == 3
     assert water_data["coefficients"] is not None
-    assert len(water_data["coefficients"]) == 1  # Single feature: calmness_score
+    assert len(water_data["coefficients"]) == 1  # Single feature: stress_score
 
     # Earth model should not exist (no earth sessions)
     earth_resp = client.get(f"/model/state/{player_id}?model_name=earth")
@@ -224,7 +224,7 @@ def test_water_model_insufficient_data(client):
     for i in range(2):
         ingest_water_session(
             client, player_id, f"water-sess-{i+1}",
-            calmness_score=0.6 + i * 0.1,
+            stress_score=60 + i * 10,
             ts_utc=f"2024-01-{15+i}T10:00:00Z",
         )
 
@@ -239,7 +239,7 @@ def test_get_model_state_with_model_name_param(client):
     """GET /model/state/{id}?model_name=water returns water model."""
     player_id = "player-water-param"
 
-    ingest_water_session(client, player_id, "water-sess-1", 0.8)
+    ingest_water_session(client, player_id, "water-sess-1", 80)
 
     # Default (earth) should 404
     resp_default = client.get(f"/model/state/{player_id}")
