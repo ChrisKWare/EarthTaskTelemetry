@@ -193,8 +193,14 @@ class TestCompanyDashboardEndpoints:
         response = client.get("/dashboard/company", params={"t": "invalid-token"})
         assert response.status_code == 403
 
-    def test_dashboard_company_valid_token_insufficient_players(self, client):
-        """Test /dashboard/company with valid token but < 5 players."""
+    def test_dashboard_company_valid_token_insufficient_players(self, client, monkeypatch):
+        """Test /dashboard/company with valid token but 0 players (below threshold)."""
+        import backend.app.settings as settings
+        import backend.app.main as main_mod
+
+        monkeypatch.setattr(settings, "MIN_COMPANY_N", 5)
+        monkeypatch.setattr(main_mod, "MIN_COMPANY_N", 5)
+
         company_id = self._create_company_sessions(client, "SmallCo", n_players=3)
         token = compute_dashboard_token(company_id)
 
@@ -226,8 +232,14 @@ class TestCompanyDashboardEndpoints:
         response = client.get("/dashboard/summary", params={"t": "invalid-token"})
         assert response.status_code == 403
 
-    def test_dashboard_summary_insufficient_players(self, client):
-        """Test /dashboard/summary returns 403 with < 5 players."""
+    def test_dashboard_summary_insufficient_players(self, client, monkeypatch):
+        """Test /dashboard/summary returns 403 when below threshold."""
+        import backend.app.settings as settings
+        import backend.app.main as main_mod
+
+        monkeypatch.setattr(settings, "MIN_COMPANY_N", 5)
+        monkeypatch.setattr(main_mod, "MIN_COMPANY_N", 5)
+
         company_id = self._create_company_sessions(client, "TinyCo", n_players=2)
         token = compute_dashboard_token(company_id)
 

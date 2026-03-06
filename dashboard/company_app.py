@@ -1,10 +1,11 @@
 """Streamlit dashboard for Company-level Earth Task Telemetry."""
+import base64
 import os
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
 import requests
-import plotly.express as px
 import plotly.graph_objects as go
 
 
@@ -25,12 +26,34 @@ def get_backend_url():
 API_BASE_URL = get_backend_url()
 
 st.set_page_config(
-    page_title="Company Dashboard - Earth Task Telemetry",
+    page_title="Company Dashboard - Neuraserv",
     page_icon="\U0001f3e2",
     layout="wide",
 )
 
-st.title("\U0001f3e2 Company Dashboard")
+# --- Header: Neuraserv logo + title ---
+_LOGO_PATH = Path(__file__).parent / "assets" / "neuraserv_logo.png"
+
+
+def _render_header():
+    """Render the dashboard header with logo and title."""
+    logo_b64 = base64.b64encode(_LOGO_PATH.read_bytes()).decode()
+    st.markdown(
+        f"""
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:0.5rem;">
+            <img src="data:image/png;base64,{logo_b64}"
+                 alt="Neuraserv"
+                 style="height:48px; width:auto; object-fit:contain;">
+            <span style="font-size:2rem; font-weight:700; line-height:1.2;">
+                Company Dashboard
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_render_header()
 
 
 def check_backend_health():
@@ -240,7 +263,7 @@ def _build_performance_chart(df, has_earth, has_water, predictions, title):
 
 
 # Privacy gate placeholder text
-PRIVACY_MSG = "Hidden until 5 players for anonymity."
+PRIVACY_MSG = "Hidden until 1 player for anonymity."
 
 # Get token from URL query param
 query_params = st.query_params
@@ -250,13 +273,7 @@ token = query_params.get("t", None)
 backend_ok = check_backend_health()
 
 # Sidebar
-st.sidebar.header("Dashboard Status")
-if backend_ok:
-    st.sidebar.markdown("**Backend:** :green_circle: Connected")
-    st.sidebar.caption(f"`{API_BASE_URL}`")
-else:
-    st.sidebar.markdown("**Backend:** :red_circle: Unreachable")
-    st.sidebar.caption(f"`{API_BASE_URL}`")
+st.sidebar.header("Dashboard")
 
 # Main content
 if not token:
@@ -314,9 +331,9 @@ else:
 
         if privacy_gated:
             st.warning(
-                f"Insufficient players ({n_players}/5). "
+                f"Insufficient players ({n_players}/1). "
                 "Aggregates are hidden to protect individual privacy. "
-                "Once 5 or more unique players complete sessions, data will appear."
+                "Once 1 or more unique players complete sessions, data will appear."
             )
 
         # --- KPI Row ---
@@ -521,69 +538,37 @@ else:
 
         st.divider()
 
-        # --- Additional charts (only when data available and not gated) ---
+        # --- Period Details (collapsed by default) ---
         if not privacy_gated and df is not None:
-            col_left, col_right = st.columns(2)
-
-            with col_left:
+            with st.expander("Period details"):
+                table_cols = ["bucket_start", "n_sessions"]
+                col_names = ["Period Start", "Sessions"]
                 if has_earth_ts:
-                    df_burden = df.dropna(subset=["avg_repetition_burden"])
-                    fig_burden = px.line(
-                        df_burden,
-                        x="bucket_start",
-                        y="avg_repetition_burden",
-                        markers=True,
-                        title="Average Repetition Burden",
-                        color_discrete_sequence=["#ff7f0e"],
+                    table_cols += ["avg_brain_performance_score", "avg_repetition_burden"]
+                    col_names += ["Brain Performance Score", "Repetition Burden"]
+                if has_water_ts:
+                    table_cols += ["avg_stress_score"]
+                    col_names += ["Stress Score"]
+
+                display_df = df[table_cols].copy()
+                display_df.columns = col_names
+                if "Brain Performance Score" in display_df.columns:
+                    display_df["Brain Performance Score"] = display_df["Brain Performance Score"].apply(
+                        lambda x: f"{x:.2%}" if x is not None and pd.notna(x) else "-"
                     )
-                    fig_burden.update_yaxes(range=[0.5, 3.5])
-                    fig_burden.update_layout(
-                        xaxis_title="Date",
-                        yaxis_title="Avg Attempts Used"
+                if "Repetition Burden" in display_df.columns:
+                    display_df["Repetition Burden"] = display_df["Repetition Burden"].apply(
+                        lambda x: f"{x:.2f}" if x is not None and pd.notna(x) else "-"
                     )
-                    st.plotly_chart(fig_burden, use_container_width=True)
-
-            with col_right:
-                fig_sessions = px.bar(
-                    df,
-                    x="bucket_start",
-                    y="n_sessions",
-                    title="Sessions per Period",
-                    color_discrete_sequence=["#1f77b4"],
-                )
-                fig_sessions.update_layout(
-                    xaxis_title="Date",
-                    yaxis_title="Number of Sessions"
-                )
-                st.plotly_chart(fig_sessions, use_container_width=True)
-
-            # Data table
-            st.subheader("Period Details")
-            table_cols = ["bucket_start", "n_sessions"]
-            col_names = ["Period Start", "Sessions"]
-            if has_earth_ts:
-                table_cols += ["avg_brain_performance_score", "avg_repetition_burden"]
-                col_names += ["Brain Performance Score", "Repetition Burden"]
-            if has_water_ts:
-                table_cols += ["avg_stress_score"]
-                col_names += ["Stress Score"]
-
-            display_df = df[table_cols].copy()
-            display_df.columns = col_names
-            if "Brain Performance Score" in display_df.columns:
-                display_df["Brain Performance Score"] = display_df["Brain Performance Score"].apply(
-                    lambda x: f"{x:.2%}" if x is not None and pd.notna(x) else "-"
-                )
-            if "Repetition Burden" in display_df.columns:
-                display_df["Repetition Burden"] = display_df["Repetition Burden"].apply(
-                    lambda x: f"{x:.2f}" if x is not None and pd.notna(x) else "-"
-                )
-            if "Stress Score" in display_df.columns:
-                display_df["Stress Score"] = display_df["Stress Score"].apply(
-                    lambda x: f"{x:.1f}%" if x is not None and pd.notna(x) else "-"
-                )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+                if "Stress Score" in display_df.columns:
+                    display_df["Stress Score"] = display_df["Stress Score"].apply(
+                        lambda x: f"{x:.1f}%" if x is not None and pd.notna(x) else "-"
+                    )
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+        elif not privacy_gated:
+            with st.expander("Period details"):
+                st.info("No period data available yet.")
 
 # Footer
 st.sidebar.divider()
-st.sidebar.caption("Earth Task Telemetry - Company Dashboard v0.2.0")
+st.sidebar.caption("Powered by Neuraserv")
